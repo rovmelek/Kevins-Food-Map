@@ -1,0 +1,12 @@
+{
+  "name": "nasc-food",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Restaurants near the NASC office on a Google Map",
+  "main": "server.js",
+  "engines": { "node": ">=18.17" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  }
+}

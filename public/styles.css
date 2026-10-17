@@ -1,0 +1,59 @@
+:root {
+  --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #5d6677; --border: #e2e5ea;
+  --accent: #d9480f; --accent-ink: #fff; --hover: #fff4ec; --error: #c92a2a; --ok: #2b8a3e;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); }
+.app { display: grid; grid-template-columns: minmax(320px, 400px) 1fr; height: 100vh; }
+.left { display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--border); min-height: 0; }
+.right { position: relative; min-height: 0; }
+#map { position: absolute; inset: 0; }
+
+.top { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; }
+h1 { font-size: 20px; margin: 0; }
+.btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn:disabled { opacity: .6; cursor: progress; }
+
+.add { margin: 0 16px 8px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.tab { flex: 1; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: 5px; font: inherit; cursor: pointer; }
+.tab.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+#addForm { display: flex; flex-direction: column; gap: 6px; }
+input, select, textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); width: 100%; }
+textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.results { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; max-height: 140px; overflow: auto; }
+.results li { padding: 2px 0; word-break: break-all; }
+.results .added { color: var(--ok); } .results .duplicate { color: var(--muted); } .results .error { color: var(--error); }
+
+.controls { display: flex; gap: 6px; padding: 4px 16px; }
+.controls input { flex: 3; } .controls select { flex: 2; }
+.origin { margin: 4px 16px 6px; color: var(--muted); font-size: 12px; }
+.origin button { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
+
+.list { list-style: none; margin: 0; padding: 0 16px 16px; overflow-y: auto; flex: 1; }
+.card { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: var(--panel); }
+.card:hover, .card.selected { background: var(--hover); border-color: var(--accent); }
+.icon { width: 34px; height: 34px; border-radius: 50%; background: var(--bg); display: grid; place-items: center; font-size: 18px; }
+.name { font-weight: 600; margin: 0 0 2px; }
+.meta { color: var(--muted); font-size: 12px; margin: 1px 0; }
+.meta a { color: inherit; }
+.side { text-align: right; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.tag { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; color: var(--text); cursor: pointer; font: inherit; font-size: 11px; }
+.del { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 2px; }
+.del:hover { color: var(--error); }
+.empty { color: var(--muted); text-align: center; padding: 24px 8px; }
+
+.map-notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); background: var(--bg); }
+.info h3 { margin: 0 0 4px; font-size: 14px; } .info p { margin: 2px 0; font-size: 12px; }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 45vh auto; height: auto; }
+  .right { order: -1; height: 45vh; }
+  .left { border-right: 0; }
+  .list { overflow: visible; }
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #15181e; --panel: #1d2129; --text: #e7e9ee; --muted: #9aa3b2; --border: #2e3440; --hover: #2a2420; }
+}

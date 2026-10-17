@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NASC Food</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="left">
+      <header class="top">
+        <h1>NASC Food</h1>
+        <button id="addToggle" class="btn primary" aria-expanded="false" aria-controls="addPanel">+ Add</button>
+      </header>
+
+      <section id="addPanel" class="add" hidden>
+        <div class="tabs" role="tablist">
+          <button role="tab" class="tab active" data-mode="single" aria-selected="true">One link</button>
+          <button role="tab" class="tab" data-mode="bulk" aria-selected="false">Bulk paste</button>
+        </div>
+        <form id="addForm">
+          <input id="singleInput" type="url" placeholder="https://maps.app.goo.gl/..." autocomplete="off">
+          <textarea id="bulkInput" rows="6" hidden placeholder="Paste Markdown or plain text with one or more Google Maps links, e.g.&#10;- [Szechuan Brothers](https://maps.app.goo.gl/v5wA1hGRb3JP2tYb8)&#10;- https://maps.app.goo.gl/..."></textarea>
+          <button class="btn primary" type="submit" id="addSubmit">Add</button>
+        </form>
+        <ul id="addResults" class="results"></ul>
+      </section>
+
+      <div class="controls">
+        <input id="search" type="search" placeholder="Search by name" aria-label="Search by name">
+        <select id="cuisineFilter" aria-label="Filter by food type"><option value="">All food types</option></select>
+      </div>
+      <p id="origin" class="origin"></p>
+      <ul id="list" class="list" aria-live="polite"></ul>
+    </aside>
+
+    <main class="right">
+      <div id="map"></div>
+      <div id="mapNotice" class="map-notice" hidden></div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
