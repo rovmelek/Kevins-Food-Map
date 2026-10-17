@@ -32,7 +32,9 @@ function loadDotEnv(file) {
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+    if (!m || m[1] in process.env) continue;
+    const quoted = m[2].match(/^(['"])(.*)\1$/);
+    process.env[m[1]] = quoted ? quoted[2] : m[2].replace(/\s+#.*$/, '');
   }
 }
 
