@@ -115,7 +115,7 @@ test('reports Places API errors as a warning, not a failure', async () => {
 test('HTTP API: add (bulk), dedupe, filter data, edit, delete, persistence', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nascfood-'));
   process.env.DATA_FILE = path.join(dir, 'r.json');
-  process.env.GOOGLE_MAPS_API_KEY = '';
+  for (const k of ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY', 'OFFICE_LAT', 'OFFICE_LNG', 'OFFICE_NAME']) delete process.env[k];
   delete require.cache[require.resolve('../server')];
   const { createServer, loadStore } = require('../server');
   loadStore();

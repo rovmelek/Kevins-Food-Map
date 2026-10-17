@@ -9,7 +9,8 @@ const crypto = require('crypto');
 const { extractMapsLinks } = require('./lib/parse');
 const { resolveLink } = require('./lib/resolve');
 
-loadDotEnv(path.join(__dirname, '.env'));
+// Only when started as the app, so tests aren't affected by a local .env.
+if (require.main === module) loadDotEnv(path.join(__dirname, '.env'));
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -21,12 +22,11 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BULK = 100;
 
 // PLACEHOLDER until the real NASC office address is known.
-const OFFICE = {
-  name: process.env.OFFICE_NAME || 'NASC office (placeholder location)',
-  lat: Number(process.env.OFFICE_LAT || 45.6387),
-  lng: Number(process.env.OFFICE_LNG || -122.6615),
-  placeholder: !process.env.OFFICE_LAT,
-};
+const officeLat = parseFloat(process.env.OFFICE_LAT), officeLng = parseFloat(process.env.OFFICE_LNG);
+const officeSet = Math.abs(officeLat) <= 90 && Math.abs(officeLng) <= 180;
+const OFFICE = officeSet
+  ? { name: process.env.OFFICE_NAME || 'NASC office', lat: officeLat, lng: officeLng, placeholder: false }
+  : { name: 'NASC office (placeholder location)', lat: 45.6387, lng: -122.6615, placeholder: true };
 
 function loadDotEnv(file) {
   if (!fs.existsSync(file)) return;
@@ -193,7 +193,7 @@ if (require.main === module) {
     console.log(`NASC Food running at http://${HOST}:${PORT}`);
     if (!BROWSER_KEY) console.warn('  ! No GOOGLE_MAPS_API_KEY: the map will not load (list still works).');
     if (!SERVER_KEY) console.warn('  ! No Places key: added restaurants will have name and pin only, no phone/address.');
-    if (OFFICE.placeholder) console.warn('  ! OFFICE_LAT/OFFICE_LNG not set: using a placeholder office location.');
+    if (OFFICE.placeholder) console.warn('  ! OFFICE_LAT/OFFICE_LNG missing or invalid: using a placeholder office location.');
   });
 }
 
