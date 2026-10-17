@@ -14,6 +14,36 @@ npm test
 
 Location permission only works on `localhost` or HTTPS. If it is denied, the list is sorted from the office location in `.env` (`OFFICE_LAT`, `OFFICE_LNG`), or from the center of ZIP 98683 if those are not set.
 
+## Run on a server (VPS)
+
+On a Linux server with systemd (e.g. Ubuntu), install it as a service so it starts on boot and restarts itself after a crash:
+
+```sh
+git clone https://github.com/rovmelek/NASC-Food.git && cd NASC-Food
+cp .env.example .env      # add your key and office location
+bin/nasc-food install     # asks for sudo; adds the `nasc-food` command
+nasc-food start
+```
+
+| Command | What it does |
+| --- | --- |
+| `nasc-food start` / `stop` / `restart` | control the service |
+| `nasc-food status` | is it running, and recent log lines |
+| `nasc-food logs` | follow the log (Ctrl+C to exit) |
+| `nasc-food test` | run the automated tests |
+| `nasc-food update` | `git pull`, run the tests, restart if they pass |
+| `nasc-food uninstall` | remove the service (keeps your data) |
+
+The server only listens on `127.0.0.1:3000`. To reach it from the internet, put a web server with HTTPS in front of it; location sharing in browsers only works over HTTPS. With [Caddy](https://caddyserver.com/), which gets certificates automatically, the whole config is:
+
+```
+food.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Before going public: add your domain to the key's Websites restriction, set daily quotas, and remember that anyone who can open the site can add or delete restaurants.
+
 ## Google setup
 
 In Google Cloud Console, enable billing and these two APIs, then create a key:

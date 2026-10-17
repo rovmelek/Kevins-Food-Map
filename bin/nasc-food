@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# nasc-food: manage the NASC Food server as a systemd service.
+#   nasc-food install     install and enable the service (starts on boot)
+#   nasc-food start|stop|restart|status
+#   nasc-food logs        follow the server log (Ctrl+C to exit)
+#   nasc-food test        run the automated tests
+#   nasc-food update      git pull, run tests, restart if they pass
+#   nasc-food uninstall   stop and remove the service
+set -euo pipefail
+
+SERVICE=nasc-food
+UNIT=/etc/systemd/system/$SERVICE.service
+DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+sudo_() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
+
+need_unit() {
+  [ -f "$UNIT" ] || { echo "Service not installed. Run: $0 install" >&2; exit 1; }
+}
+
+cmd_install() {
+  local node user
+  node="$(command -v node || true)"
+  [ -n "$node" ] || { echo "node not found on PATH. Install Node.js 18.17+ first." >&2; exit 1; }
+  node="$(readlink -f "$node")"
+  user="${SUDO_USER:-$(id -un)}"
+  [ -f "$DIR/.env" ] || echo "Warning: $DIR/.env not found; copy .env.example to .env and add your key." >&2
+  mkdir -p "$DIR/data"
+  [ -f "$DIR/data/restaurants.json" ] || echo '[]' > "$DIR/data/restaurants.json"
+  sed -e "s|@USER@|$user|g" -e "s|@DIR@|$DIR|g" -e "s|@NODE@|$node|g" \
+    "$DIR/deploy/nasc-food.service.in" | sudo_ tee "$UNIT" > /dev/null
+  sudo_ systemctl daemon-reload
+  sudo_ systemctl enable "$SERVICE"
+  sudo_ ln -sf "$DIR/bin/nasc-food" /usr/local/bin/nasc-food
+  echo "Installed. Runs as $user from $DIR with $node."
+  echo "Start it with: nasc-food start"
+}
+
+cmd_uninstall() {
+  need_unit
+  sudo_ systemctl disable --now "$SERVICE"
+  sudo_ rm -f "$UNIT"
+  sudo_ systemctl daemon-reload
+  [ "$(readlink -f /usr/local/bin/nasc-food 2>/dev/null)" = "$DIR/bin/nasc-food" ] && sudo_ rm -f /usr/local/bin/nasc-food
+  echo "Removed. Your data in $DIR/data is untouched."
+}
+
+cmd_update() {
+  git -C "$DIR" pull --ff-only
+  (cd "$DIR" && npm test)
+  if [ -f "$UNIT" ]; then sudo_ systemctl restart "$SERVICE"; echo "Updated and restarted."; fi
+}
+
+case "${1:-}" in
+  install)   cmd_install ;;
+  uninstall) cmd_uninstall ;;
+  start|stop|restart) need_unit; sudo_ systemctl "$1" "$SERVICE"; systemctl --no-pager --lines=0 status "$SERVICE" || true ;;
+  status)    need_unit; systemctl --no-pager status "$SERVICE" ;;
+  logs)      need_unit; sudo_ journalctl -u "$SERVICE" -f --no-pager ;;
+  test)      cd "$DIR" && npm test ;;
+  update)    cmd_update ;;
+  *) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
