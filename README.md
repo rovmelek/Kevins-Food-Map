@@ -1,6 +1,6 @@
 # NASC Food
 
-Restaurants on a Google Map. Left panel: add links (one or bulk paste), search by name, filter by food type, and cards sorted by distance. Right panel: the map, showing whatever the filter shows.
+Restaurants on a Google Map. Left panel: search by name, filter by food type, and cards sorted by distance. Right panel: the map, showing whatever the filter shows. Adding, editing and deleting happen in the password-protected **Manage** window.
 
 ## Run it
 
@@ -8,6 +8,7 @@ Needs Node 18.17 or newer. No packages to install.
 
 ```sh
 cp .env.example .env      # then fill in the key and office location
+npm run set-password      # admin password for the Manage window
 npm start                 # http://127.0.0.1:3000
 npm test
 ```
@@ -22,6 +23,7 @@ On a Linux server with systemd (e.g. Ubuntu), install it as a service so it star
 git clone https://github.com/rovmelek/NASC-Food.git && cd NASC-Food
 cp .env.example .env      # add your key and office location
 bin/nasc-food install     # asks for sudo; adds the `nasc-food` command
+nasc-food set-password
 nasc-food start
 ```
 
@@ -30,6 +32,7 @@ nasc-food start
 | `nasc-food start` / `stop` / `restart` | control the service |
 | `nasc-food status` | is it running, and recent log lines |
 | `nasc-food logs` | follow the log (Ctrl+C to exit) |
+| `nasc-food set-password` | set or change the Manage password (then `restart`) |
 | `nasc-food test` | run the automated tests |
 | `nasc-food update` | `git pull`, run the tests, restart if they pass |
 | `nasc-food uninstall` | remove the service (keeps your data) |
@@ -42,7 +45,7 @@ food.example.com {
 }
 ```
 
-Before going public: add your domain to the key's Websites restriction, set daily quotas, and remember that anyone who can open the site can add or delete restaurants.
+Behind a proxy like this, add `TRUST_PROXY=1` to `.env` so the login lockout sees visitors' real addresses. Before going public, add your domain to the key's Websites restriction and set daily quotas.
 
 ## Google setup
 
@@ -64,10 +67,20 @@ When zoomed out, the map hides Google's own places, transit and road icons so th
 1. `maps.app.goo.gl/...` is a redirect. The server follows it (browsers can't read cross-site redirects) and only ever follows it to Google Maps hosts.
 2. The long URL contains the place name and its pin (`!3d<lat>!4d<lng>`).
 3. The server searches Places for that name near the pin and keeps the result only if it is within 300 m, so a same-named place elsewhere is never picked.
-4. Food type comes from the Places type (`chinese_restaurant` becomes Chinese), else from words in the name (Szechuan, sushi, pho...). Click the tag on a card to change it; manual choices survive a refresh.
+4. Food type comes from the Places type (`chinese_restaurant` becomes Chinese), else from words in the name (Szechuan, sushi, pho...). Change it in Manage → Restaurants; manual choices survive a refresh.
 
-Without a Places key, cards still get the name and pin from the link, with no phone or address. Once a key works, the "↻ Details" button on a card looks it up again.
+Without a Places key, cards still get the name and pin from the link, with no phone or address. Once a key works, "↻ Details" in Manage → Restaurants looks it up again.
 
 ## Data
 
-Restaurants are stored in `data/restaurants.json`, shared by everyone who uses the same server. The add, edit and delete endpoints have no login, so don't expose the server publicly without putting access control in front of it.
+Restaurants are stored in `data/restaurants.json`, shared by everyone who uses the same server, and tracked in git so the list moves with the code.
+
+## Manage window and password
+
+Anyone can view the list and map. **Manage** asks for the admin password, then has two tabs: **Add** (one link or a bulk paste) and **Restaurants** (search, change food type, refresh details, select all/none, delete selected). The server checks the login on every add, edit and delete, so hiding the button is not the only protection.
+
+- `npm run set-password` asks for the password twice (at least 10 characters) and writes only its hash to `ADMIN_PASSWORD_HASH` in `.env`. Restart the server after changing it. Until a password is set, nobody can make changes.
+- The hash is Argon2id (OWASP's first choice: 19 MiB memory, 2 passes) using Node's built-in `crypto.argon2`, which needs Node 24 or newer. On older Node it uses scrypt (OWASP's next choice, N=2^17). No packages are involved either way. A hash made on Node 24 won't verify on older Node; run `set-password` again if you downgrade.
+- A login lasts 12 hours in an HttpOnly, SameSite=Strict cookie, marked Secure when served over HTTPS. Sessions live in memory, so a restart logs you out.
+- Five wrong passwords from one address lock it out for 15 minutes.
+- Over plain HTTP the password crosses the network unencrypted, so use HTTPS (see the Caddy example above) anywhere but your own machine.

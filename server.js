@@ -8,6 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { extractMapsLinks } = require('./lib/parse');
 const { resolveLink } = require('./lib/resolve');
+const auth = require('./lib/auth');
 
 // Only when started as the app, so tests aren't affected by a local .env.
 if (require.main === module) loadDotEnv(path.join(__dirname, '.env'));
@@ -20,6 +21,11 @@ const MAP_ID = process.env.GOOGLE_MAPS_MAP_ID || '';
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'restaurants.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BULK = 100;
+const PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || '';
+// Behind a reverse proxy (Caddy, nginx) set TRUST_PROXY=1 so the login
+// lockout counts the visitor's address, not the proxy's.
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+const COOKIE = 'nasc_session';
 
 const officeLat = parseFloat(process.env.OFFICE_LAT), officeLng = parseFloat(process.env.OFFICE_LNG);
 const officeSet = Math.abs(officeLat) <= 90 && Math.abs(officeLng) <= 180;
@@ -90,8 +96,8 @@ async function addFromLink(url) {
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 
-function send(res, status, body, type = 'application/json; charset=utf-8') {
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+function send(res, status, body, type = 'application/json; charset=utf-8', headers = {}) {
+  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
 
@@ -111,14 +117,66 @@ function readJson(req, limit = 200000) {
   });
 }
 
+function clientIp(req) {
+  if (TRUST_PROXY && req.headers['x-forwarded-for']) return req.headers['x-forwarded-for'].split(',')[0].trim();
+  return req.socket.remoteAddress;
+}
+
+function sessionCookie(req, token, maxAgeSec) {
+  // Secure when the browser reached us over HTTPS (directly or via the proxy).
+  const https = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+  return `${COOKIE}=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSec}${https ? '; Secure' : ''}`;
+}
+
+function isLoggedIn(req) {
+  return auth.isValidSession(auth.parseCookies(req.headers.cookie)[COOKIE]);
+}
+
+async function handleAuth(req, res, action) {
+  if (action === 'session' && req.method === 'GET') {
+    return send(res, 200, { passwordSet: !!PASSWORD_HASH, loggedIn: isLoggedIn(req) });
+  }
+  if (action === 'login' && req.method === 'POST') {
+    if (!PASSWORD_HASH) return send(res, 503, { error: 'No admin password is set. On the server run: nasc-food set-password (or npm run set-password), then restart.' });
+    const ip = clientIp(req);
+    const wait = auth.lockedFor(ip);
+    if (wait) return send(res, 429, { error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60000)} min.` }, undefined, { 'Retry-After': String(Math.ceil(wait / 1000)) });
+    const { password } = await readJson(req);
+    let ok = false;
+    try { ok = typeof password === 'string' && !!password && await auth.verifyPassword(password, PASSWORD_HASH); }
+    catch (e) { return send(res, 500, { error: e.message }); } // e.g. Argon2id hash on Node < 24
+    if (!ok) {
+      auth.recordFailure(ip);
+      return send(res, 401, { error: 'Wrong password.' });
+    }
+    auth.clearFailures(ip);
+    const token = auth.createSession();
+    return send(res, 200, { loggedIn: true }, undefined, { 'Set-Cookie': sessionCookie(req, token, auth.SESSION_MS / 1000) });
+  }
+  if (action === 'logout' && req.method === 'POST') {
+    auth.endSession(auth.parseCookies(req.headers.cookie)[COOKIE]);
+    return send(res, 200, { loggedIn: false }, undefined, { 'Set-Cookie': sessionCookie(req, '', 0) });
+  }
+  return send(res, 404, { error: 'Not found' });
+}
+
 async function handleApi(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
+  // Every change must be JSON. Browsers can't send that cross-site without
+  // permission, which (with the SameSite cookie) blocks forged requests.
+  if (req.method !== 'GET' && !String(req.headers['content-type'] || '').startsWith('application/json')) {
+    return send(res, 415, { error: 'Send JSON' });
+  }
   if (req.method === 'GET' && parts[1] === 'config') {
     return send(res, 200, { browserKey: BROWSER_KEY, mapId: MAP_ID, office: OFFICE, placesEnabled: !!SERVER_KEY });
   }
+  if (parts[1] === 'auth') return handleAuth(req, res, parts[2]);
   if (parts[1] !== 'restaurants') return send(res, 404, { error: 'Not found' });
 
   if (parts.length === 2 && req.method === 'GET') return send(res, 200, restaurants);
+
+  // Everything below changes the list: only for a logged-in admin.
+  if (!isLoggedIn(req)) return send(res, 401, { error: 'Log in to manage restaurants.' });
 
   if (parts.length === 2 && req.method === 'POST') {
     const body = await readJson(req);
@@ -216,6 +274,8 @@ if (require.main === module) {
     console.log(`NASC Food running at http://${shown}:${PORT}`);
     if (!BROWSER_KEY) console.warn('  ! No GOOGLE_MAPS_API_KEY: the map will not load (list still works).');
     if (!SERVER_KEY) console.warn('  ! No Places key: added restaurants will have name and pin only, no phone/address.');
+    if (PASSWORD_HASH.startsWith('argon2id$') && auth.algorithm !== 'argon2id') console.warn('  ! ADMIN_PASSWORD_HASH uses Argon2id, which needs Node.js 24+. Upgrade Node or run set-password again.');
+    if (!PASSWORD_HASH) console.warn('  ! No ADMIN_PASSWORD_HASH: Manage is locked. Run: npm run set-password');
     if (OFFICE.placeholder) console.warn('  ! OFFICE_LAT/OFFICE_LNG missing or invalid: using the ZIP 98683 default location.');
   });
 }

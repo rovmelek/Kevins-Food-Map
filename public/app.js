@@ -1,5 +1,6 @@
 'use strict';
-// NASC Food front end: left panel (add, search, filter, cards) + right map.
+// NASC Food front end: left panel (search, filter, cards) + right map, and a
+// password-protected Manage window for adding, editing and deleting.
 
 const state = {
   restaurants: [],
@@ -8,8 +9,10 @@ const state = {
   search: '',
   cuisine: '',
   selectedId: null,
-  selecting: false,   // select mode: cards show checkboxes for bulk delete
-  checked: new Set(),
+  loggedIn: false,
+  manageView: 'add',   // 'add' | 'edit'
+  editSearch: '',
+  checked: new Set(),  // ids ticked in the Manage list
 };
 const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null };
 
@@ -27,6 +30,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && state.loggedIn) { state.loggedIn = false; renderManage(); }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
@@ -77,60 +81,14 @@ function renderOrigin() {
   }
 }
 
-function renderTools(items) {
-  const el = $('listTools');
-  if (!state.restaurants.length) { el.innerHTML = ''; return; }
-  if (!state.selecting) {
-    el.innerHTML = '<button type="button" class="link-btn" data-tool="select">Select</button>';
-    return;
-  }
-  const n = state.checked.size;
-  el.innerHTML = `
-    <button type="button" class="link-btn" data-tool="all" ${n === items.length ? 'disabled' : ''}>Select all (${items.length})</button>
-    <button type="button" class="link-btn" data-tool="none" ${n ? '' : 'disabled'}>Select none</button>
-    <span class="spacer"></span>
-    <button type="button" class="btn danger small" data-tool="delete" ${n ? '' : 'disabled'}>Delete${n ? ` (${n})` : ''}</button>
-    <button type="button" class="btn small" data-tool="done">Done</button>`;
-}
-
-async function onToolClick(e) {
-  const tool = e.target.closest('[data-tool]')?.dataset.tool;
-  if (!tool) return;
-  const items = visible();
-  if (tool === 'select') state.selecting = true;
-  if (tool === 'done') { state.selecting = false; state.checked.clear(); }
-  if (tool === 'all') items.forEach(r => state.checked.add(r.id));
-  if (tool === 'none') state.checked.clear();
-  if (tool === 'delete') {
-    const n = state.checked.size;
-    const all = n === state.restaurants.length;
-    if (!confirm(all ? `Delete all ${n} restaurants? This can't be undone.` : `Delete ${n} restaurant${n === 1 ? '' : 's'}? This can't be undone.`)) return;
-    const ids = [...state.checked];
-    const { deleted } = await api('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids }) });
-    state.restaurants = state.restaurants.filter(r => !state.checked.has(r.id));
-    if (state.checked.has(state.selectedId)) { state.selectedId = null; map.info?.close(); }
-    state.checked.clear();
-    if (!state.restaurants.length) state.selecting = false;
-    toast(`Deleted ${deleted} restaurant${deleted === 1 ? '' : 's'}.`);
-  }
-  renderAll();
-}
-
 function renderList() {
   const items = visible();
-  // Only restaurants you can see stay checked, so a delete never hits
-  // something hidden by the search or filter.
-  const shown = new Set(items.map(r => r.id));
-  for (const id of state.checked) if (!shown.has(id)) state.checked.delete(id);
-  renderTools(items);
   const list = $('list');
-  list.classList.toggle('selecting', state.selecting);
   if (!items.length) {
-    list.innerHTML = `<li class="empty">${state.restaurants.length ? 'No restaurants match.' : 'No restaurants yet. Use “+ Add” to paste Google Maps links.'}</li>`;
+    list.innerHTML = `<li class="empty">${state.restaurants.length ? 'No restaurants match.' : 'No restaurants yet. Use “Manage” to add Google Maps links.'}</li>`;
   } else {
     list.innerHTML = items.map(r => `
-      <li class="card${r.id === state.selectedId ? ' selected' : ''}${state.checked.has(r.id) ? ' checked' : ''}" data-id="${esc(r.id)}" tabindex="0">
-        ${state.selecting ? `<input type="checkbox" class="check" data-act="check" aria-label="Select ${esc(r.name)}" ${state.checked.has(r.id) ? 'checked' : ''}>` : ''}
+      <li class="card${r.id === state.selectedId ? ' selected' : ''}" data-id="${esc(r.id)}" tabindex="0">
         <div class="icon" aria-hidden="true">${iconFor(r.cuisine)}</div>
         <div>
           <p class="name">${esc(r.name)}</p>
@@ -139,16 +97,14 @@ function renderList() {
         </div>
         <div class="side">
           <span>${r.km != null ? formatDistance(r.km) : ''}</span>
-          <button class="tag" data-act="cuisine" title="Change food type">${esc(r.cuisine)}</button>
-          ${!r.enriched && state.config.placesEnabled ? '<button class="tag" data-act="refresh" title="Look up phone and address again">↻ Details</button>' : ''}
-          <button class="del" data-act="delete" title="Remove" aria-label="Remove ${esc(r.name)}">✕</button>
+          <span class="tag">${esc(r.cuisine)}</span>
         </div>
       </li>`).join('');
   }
   renderMarkers(items);
 }
 
-function renderAll() { renderFilterOptions(); renderOrigin(); renderList(); }
+function renderAll() { renderFilterOptions(); renderOrigin(); renderList(); renderEditList(); }
 
 // ---- map -------------------------------------------------------------------
 
@@ -312,23 +268,7 @@ function locateUser(explicit = false) {
   }, { timeout: 10000, maximumAge: 300000 });
 }
 
-// ---- add / edit / delete ---------------------------------------------------
-
-let addMode = 'single';
-function setMode(mode) {
-  addMode = mode;
-  document.querySelectorAll('.tab').forEach(t => { const on = t.dataset.mode === mode; t.classList.toggle('active', on); t.setAttribute('aria-selected', on); });
-  $('singleInput').hidden = mode !== 'single';
-  $('bulkInput').hidden = mode !== 'bulk';
-  (mode === 'single' ? $('singleInput') : $('bulkInput')).focus();
-}
-
-function openAdd() {
-  $('addResults').innerHTML = '';
-  $('toast').hidden = true;
-  $('addDialog').showModal();
-  setMode(addMode);
-}
+// ---- manage (login, add, edit, delete) -----------------------------------
 
 let toastTimer;
 function toast(msg) {
@@ -339,12 +279,75 @@ function toast(msg) {
   toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
 }
 
-// Adds the pasted link(s). If every link worked, close the dialog, report in
+async function openManage() {
+  $('toast').hidden = true;
+  $('addResults').innerHTML = '';
+  $('loginError').textContent = '';
+  const session = await api('/api/auth/session');
+  state.loggedIn = session.loggedIn;
+  state.passwordSet = session.passwordSet;
+  renderManage();
+  $('manageDialog').showModal();
+  (state.loggedIn ? (state.manageView === 'add' ? currentAddInput() : $('editSearch')) : $('password')).focus();
+}
+
+function renderManage() {
+  $('loginView').hidden = state.loggedIn;
+  $('manageView').hidden = !state.loggedIn;
+  $('logoutBtn').hidden = !state.loggedIn;
+  $('password').disabled = $('loginSubmit').disabled = !state.passwordSet;
+  $('loginHint').innerHTML = state.passwordSet
+    ? 'Enter the admin password to add, edit or delete restaurants.'
+    : 'No admin password is set yet. On the server, run <code>npm run set-password</code> (or <code>nasc-food set-password</code>), then restart it.';
+  document.querySelectorAll('#manageView .tab').forEach(t => {
+    const on = t.dataset.view === state.manageView;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on);
+  });
+  $('addPane').hidden = state.manageView !== 'add';
+  $('editPane').hidden = state.manageView !== 'edit';
+  renderEditList();
+}
+
+async function submitLogin(e) {
+  e.preventDefault();
+  $('loginSubmit').disabled = true;
+  $('loginError').textContent = '';
+  try {
+    await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ password: $('password').value }) });
+    state.loggedIn = true;
+    $('password').value = '';
+    renderManage();
+    currentAddInput().focus();
+  } catch (err) {
+    $('loginError').textContent = err.message;
+    $('password').select();
+  } finally {
+    $('loginSubmit').disabled = !state.passwordSet;
+  }
+}
+
+async function logout() {
+  await api('/api/auth/logout', { method: 'POST' });
+  state.loggedIn = false;
+  $('manageDialog').close();
+  toast('Logged out.');
+}
+
+const addMode = () => document.querySelector('input[name=addMode]:checked').value;
+const currentAddInput = () => (addMode() === 'single' ? $('singleInput') : $('bulkInput'));
+function onAddModeChange() {
+  $('singleInput').hidden = addMode() !== 'single';
+  $('bulkInput').hidden = addMode() !== 'bulk';
+  currentAddInput().focus();
+}
+
+// Adds the pasted link(s). If every link worked, close the window, report in
 // a toast and show the new place; otherwise keep it open with a line per
 // link, leaving only the failed links in the box to fix or retry.
 async function submitAdd(e) {
   e.preventDefault();
-  const input = addMode === 'single' ? $('singleInput') : $('bulkInput');
+  const input = currentAddInput();
   const out = $('addResults');
   if (!input.value.trim()) return;
   $('addSubmit').disabled = true;
@@ -360,7 +363,7 @@ async function submitAdd(e) {
     if (!failed.length) {
       input.value = '';
       out.innerHTML = '';
-      $('addDialog').close();
+      $('manageDialog').close();
       const dupes = results.length - added.length;
       const warning = added.find(r => r.warning)?.warning;
       toast([
@@ -377,7 +380,7 @@ async function submitAdd(e) {
       if (r.status === 'duplicate') return `<li class="duplicate">• Already listed: ${esc(r.restaurant.name)}</li>`;
       return `<li class="error">✕ ${esc(r.url)}: ${esc(r.error)}</li>`;
     }).join('');
-    if (addMode === 'bulk') input.value = failed.map(r => r.url).join('\n');
+    if (addMode() === 'bulk') input.value = failed.map(r => r.url).join('\n');
     if (added.length) fitToVisible();
   } catch (err) {
     out.innerHTML = `<li class="error">✕ ${esc(err.message)}</li>`;
@@ -386,18 +389,50 @@ async function submitAdd(e) {
   }
 }
 
-async function onListClick(e) {
-  const card = e.target.closest('.card');
-  if (!card) return;
-  const id = card.dataset.id;
+function editItems() {
+  const q = state.editSearch.trim().toLowerCase();
+  return state.restaurants.filter(r => !q || r.name.toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderEditList() {
+  if (!$('editList')) return;
+  const items = editItems();
+  // Only rows you can see stay ticked, so a delete never hits something
+  // hidden by the search.
+  const shown = new Set(items.map(r => r.id));
+  for (const id of state.checked) if (!shown.has(id)) state.checked.delete(id);
+  const n = state.checked.size;
+  $('editCount').textContent = `(${state.restaurants.length})`;
+  const tool = t => document.querySelector(`#editPane [data-tool="${t}"]`);
+  tool('all').textContent = `Select all (${items.length})`;
+  tool('all').disabled = !items.length || n === items.length;
+  tool('none').disabled = !n;
+  tool('delete').disabled = !n;
+  tool('delete').textContent = n ? `Delete (${n})` : 'Delete';
+  $('editList').innerHTML = items.length ? items.map(r => `
+    <li class="edit-row${state.checked.has(r.id) ? ' checked' : ''}" data-id="${esc(r.id)}">
+      <input type="checkbox" class="check" data-act="check" aria-label="Select ${esc(r.name)}" ${state.checked.has(r.id) ? 'checked' : ''}>
+      <span class="icon small" aria-hidden="true">${iconFor(r.cuisine)}</span>
+      <div class="edit-main">
+        <p class="name">${esc(r.name)}</p>
+        <p class="meta">${r.address ? esc(r.address) : 'Address not available'}</p>
+      </div>
+      <div class="edit-actions">
+        <button type="button" class="tag" data-act="cuisine" title="Change food type">${esc(r.cuisine)} ✎</button>
+        ${!r.enriched && state.config.placesEnabled ? '<button type="button" class="tag" data-act="refresh" title="Look up phone and address again">↻ Details</button>' : ''}
+      </div>
+    </li>`).join('') : `<li class="empty">${state.restaurants.length ? 'No restaurants match.' : 'No restaurants yet.'}</li>`;
+}
+
+async function onEditClick(e) {
+  const tool = e.target.closest('[data-tool]')?.dataset.tool;
+  if (tool) return onEditTool(tool);
+  const row = e.target.closest('.edit-row');
+  if (!row) return;
+  const id = row.dataset.id;
   const r = state.restaurants.find(x => x.id === id);
   const act = e.target.closest('[data-act]')?.dataset.act;
-  // In select mode a click anywhere on the card (except links) toggles it.
-  if (state.selecting && !e.target.closest('a')) {
-    if (state.checked.has(id)) state.checked.delete(id); else state.checked.add(id);
-    renderList();
-    return;
-  }
   if (act === 'cuisine') {
     const next = prompt(`Food type for ${r.name}:`, r.cuisine);
     if (next && next.trim() && next.trim() !== r.cuisine) {
@@ -413,35 +448,55 @@ async function onListClick(e) {
     if (warning) alert(warning);
     return;
   }
-  if (act === 'delete') {
-    if (!confirm(`Remove ${r.name} from the list?`)) return;
-    await api(`/api/restaurants/${id}`, { method: 'DELETE' });
-    state.restaurants = state.restaurants.filter(x => x.id !== id);
-    if (state.selectedId === id) { state.selectedId = null; map.info?.close(); }
+  // Anywhere else on the row toggles its checkbox.
+  if (state.checked.has(id)) state.checked.delete(id); else state.checked.add(id);
+  renderEditList();
+}
+
+async function onEditTool(tool) {
+  if (tool === 'all') editItems().forEach(r => state.checked.add(r.id));
+  if (tool === 'none') state.checked.clear();
+  if (tool === 'delete') {
+    const n = state.checked.size;
+    const all = n === state.restaurants.length;
+    if (!confirm(all ? `Delete all ${n} restaurants? This can't be undone.` : `Delete ${n} restaurant${n === 1 ? '' : 's'}? This can't be undone.`)) return;
+    const { deleted } = await api('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids: [...state.checked] }) });
+    state.restaurants = state.restaurants.filter(r => !state.checked.has(r.id));
+    if (state.checked.has(state.selectedId)) { state.selectedId = null; map.info?.close(); }
+    state.checked.clear();
     renderAll();
+    toast(`Deleted ${deleted} restaurant${deleted === 1 ? '' : 's'}.`);
     return;
   }
-  select(id);
+  renderEditList();
+}
+
+function onListClick(e) {
+  const card = e.target.closest('.card');
+  if (!card || e.target.closest('a')) return;
+  select(card.dataset.id);
 }
 
 // ---- boot ------------------------------------------------------------------
 
 async function init() {
-  $('addToggle').onclick = openAdd;
-  $('addClose').onclick = () => $('addDialog').close();
+  const dlg = $('manageDialog');
+  $('manageBtn').onclick = () => openManage().catch(err => alert(err.message));
+  $('manageClose').onclick = () => dlg.close();
   // Clicking the dimmed backdrop (the dialog element itself) closes it.
-  $('addDialog').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
-  document.querySelectorAll('.tab').forEach(t => t.onclick = () => setMode(t.dataset.mode));
+  dlg.addEventListener('click', e => { if (e.target === e.currentTarget) dlg.close(); });
+  $('logoutBtn').onclick = () => logout().catch(err => alert(err.message));
+  $('loginView').onsubmit = submitLogin;
+  document.querySelectorAll('#manageView .tab').forEach(t => t.onclick = () => { state.manageView = t.dataset.view; renderManage(); });
+  document.querySelectorAll('input[name=addMode]').forEach(r => r.onchange = onAddModeChange);
   $('addForm').onsubmit = submitAdd;
+  $('editSearch').oninput = e => { state.editSearch = e.target.value; renderEditList(); };
+  $('editPane').onclick = e => onEditClick(e).catch(err => alert(err.message));
   $('search').oninput = e => { state.search = e.target.value; renderList(); };
   $('cuisineFilter').onchange = e => { state.cuisine = e.target.value; renderList(); fitToVisible(); };
-  $('list').onclick = e => onListClick(e).catch(err => alert(err.message));
-  $('list').onkeydown = e => {
-    if (e.key !== 'Enter' || !e.target.classList.contains('card')) return;
-    if (state.selecting) e.target.click(); else select(e.target.dataset.id);
-  };
-  $('listTools').onclick = e => onToolClick(e).catch(err => alert(err.message));
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('addDialog').open) deselect(); });
+  $('list').onclick = onListClick;
+  $('list').onkeydown = e => { if (e.key === 'Enter' && e.target.classList.contains('card')) select(e.target.dataset.id); };
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !dlg.open) deselect(); });
 
   [state.config, state.restaurants] = await Promise.all([api('/api/config'), api('/api/restaurants')]);
   useOffice();

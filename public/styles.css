@@ -39,16 +39,13 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .origin { margin: 4px 16px 6px; color: var(--muted); font-size: 12px; }
 .origin button { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
 
-.list-tools { display: flex; align-items: center; gap: 10px; margin: 0 16px 8px; min-height: 28px; font-size: 13px; }
+.list-tools { display: flex; align-items: center; gap: 12px; margin: 10px 0 8px; min-height: 28px; font-size: 13px; }
 .list-tools .spacer { flex: 1; }
 .link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
 .link-btn:disabled { color: var(--muted); cursor: default; }
 .btn.small { padding: 4px 10px; font-size: 12px; }
 .btn.danger { background: var(--error); border-color: var(--error); color: #fff; font-weight: 600; }
-.list.selecting .card { grid-template-columns: 18px 34px 1fr auto; }
-.list.selecting .del, .list.selecting [data-act="refresh"] { display: none; }
-.card.checked { border-color: var(--error); background: color-mix(in srgb, var(--error) 10%, var(--panel)); }
-.check { width: 16px; height: 16px; margin: 9px 0 0; padding: 0; accent-color: var(--error); cursor: pointer; }
+.check { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--error); cursor: pointer; }
 .list { list-style: none; margin: 0; padding: 0 16px 16px; overflow-y: auto; flex: 1; }
 .card { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: var(--panel); }
 .card:hover, .card.selected { background: var(--hover); border-color: var(--accent); }
@@ -58,8 +55,6 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .meta a { color: inherit; }
 .side { text-align: right; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .tag { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; color: var(--text); cursor: pointer; font: inherit; font-size: 11px; }
-.del { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 2px; }
-.del:hover { color: var(--error); }
 .empty { color: var(--muted); text-align: center; padding: 24px 8px; }
 
 .map-notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); background: var(--bg); }
@@ -85,3 +80,22 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 @media (prefers-color-scheme: dark) {
   :root { --bg: #15181e; --panel: #1d2129; --text: #e7e9ee; --muted: #9aa3b2; --border: #2e3440; --hover: #2a2420; }
 }
+
+/* Manage window */
+.head-actions { display: flex; align-items: center; gap: 12px; }
+.login { display: flex; flex-direction: column; gap: 8px; }
+.hint { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
+.hint code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+.form-error { margin: 0; min-height: 18px; color: var(--error); font-size: 13px; }
+.subtabs { display: flex; gap: 16px; margin: 4px 0 8px; font-size: 13px; }
+.subtabs label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.subtabs input { width: auto; accent-color: var(--accent); }
+.edit-list { list-style: none; margin: 0; padding: 0; max-height: min(50vh, 420px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.edit-row { display: grid; grid-template-columns: 16px 26px 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.edit-row:last-child { border-bottom: 0; }
+.edit-row:hover { background: var(--bg); }
+.edit-row.checked { background: color-mix(in srgb, var(--error) 12%, var(--panel)); }
+.edit-main { min-width: 0; }
+.edit-main .name, .edit-main .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edit-actions { display: flex; gap: 6px; }
+.icon.small { width: 26px; height: 26px; font-size: 14px; }

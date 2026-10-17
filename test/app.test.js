@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { extractMapsLinks, parseMapsUrl, deriveCuisine, classifyUrl } = require('../lib/parse');
 const { resolveLink, expandShortLink } = require('../lib/resolve');
+const auth = require('../lib/auth');
 
 const SHORT = 'https://maps.app.goo.gl/v5wA1hGRb3JP2tYb8';
 // The Location header Google returned for SHORT on 2026-10-17.
@@ -115,14 +116,33 @@ test('reports Places API errors as a warning, not a failure', async () => {
 test('HTTP API: add (bulk), dedupe, filter data, edit, delete, persistence', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nascfood-'));
   process.env.DATA_FILE = path.join(dir, 'r.json');
-  for (const k of ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY', 'OFFICE_LAT', 'OFFICE_LNG', 'OFFICE_NAME']) delete process.env[k];
+  for (const k of ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY', 'OFFICE_LAT', 'OFFICE_LNG', 'OFFICE_NAME', 'TRUST_PROXY']) delete process.env[k];
+  process.env.ADMIN_PASSWORD_HASH = await auth.hashPassword('test password 123');
   delete require.cache[require.resolve('../server')];
   const { createServer, loadStore } = require('../server');
   loadStore();
   const srv = createServer().listen(0);
   const base = `http://127.0.0.1:${srv.address().port}`;
-  const j = async (p, o = {}) => { const r = await fetch(base + p, { headers: { 'Content-Type': 'application/json' }, ...o }); return [r.status, await r.json()]; };
+  let cookie = '';
+  const j = async (p, o = {}) => {
+    const r = await fetch(base + p, { ...o, headers: { 'Content-Type': 'application/json', Cookie: cookie, ...o.headers } });
+    return [r.status, await r.json(), r.headers.get('set-cookie')];
+  };
   try {
+    // Changes need a login; reading doesn't.
+    assert.strictEqual((await j('/api/restaurants'))[0], 200);
+    assert.strictEqual((await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ url: LONG }) }))[0], 401);
+    const [sw] = await j('/api/auth/login', { method: 'POST', body: JSON.stringify({ password: 'wrong' }) });
+    assert.strictEqual(sw, 401);
+    const [sl, , setCookie] = await j('/api/auth/login', { method: 'POST', body: JSON.stringify({ password: 'test password 123' }) });
+    assert.strictEqual(sl, 200);
+    assert.match(setCookie, /nasc_session=[^;]+; Path=\/api; HttpOnly; SameSite=Strict/);
+    assert.doesNotMatch(setCookie, /Secure/, 'no Secure flag over plain http');
+    cookie = setCookie.split(';')[0];
+    assert.deepStrictEqual((await j('/api/auth/session'))[1], { passwordSet: true, loggedIn: true });
+    const form = await fetch(base + '/api/restaurants/delete', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'text/plain' }, body: '{"ids":[]}' });
+    assert.strictEqual(form.status, 415, 'non-JSON writes are refused');
+
     const text = `- [a](${LONG})\n- https://www.google.com/maps/place/Pho+Hung/@45.6,-122.6,17z\n- ${LONG}\n- https://example.com`;
     const [s1, b1] = await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ text }) });
     assert.strictEqual(s1, 200);
@@ -158,6 +178,11 @@ test('HTTP API: add (bulk), dedupe, filter data, edit, delete, persistence', asy
     await new Promise(r => setTimeout(r, 50));
     assert.strictEqual(JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')).length, 1);
 
+    // Logging out ends the session.
+    await j('/api/auth/logout', { method: 'POST' });
+    assert.strictEqual((await j('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids: [] }) }))[0], 401);
+    assert.strictEqual((await j('/api/auth/session'))[1].loggedIn, false);
+
     const [, cfg] = await j('/api/config');
     assert.strictEqual(cfg.office.placeholder, true);
     const trav = await fetch(base + '/..%2fserver.js');
@@ -167,4 +192,25 @@ test('HTTP API: add (bulk), dedupe, filter data, edit, delete, persistence', asy
   } finally {
     srv.close();
   }
+});
+
+test('password hashing and login lockout', async () => {
+  const h = await auth.hashPassword('correct horse battery');
+  assert.match(h, /^(argon2id|scrypt)\$/);
+  assert.strictEqual(await auth.verifyPassword('correct horse battery', h), true);
+  assert.strictEqual(await auth.verifyPassword('correct horse batterY', h), false);
+  assert.strictEqual(await auth.verifyPassword('x', 'not a hash'), false);
+  assert.notStrictEqual(await auth.hashPassword('same'), await auth.hashPassword('same'), 'salted');
+  const ip = 'test-ip';
+  for (let i = 0; i < 4; i++) auth.recordFailure(ip);
+  assert.strictEqual(auth.lockedFor(ip), 0, '4 failures: not locked yet');
+  auth.recordFailure(ip);
+  assert.ok(auth.lockedFor(ip) > 14 * 60 * 1000, '5th failure locks for ~15 min');
+  auth.clearFailures(ip);
+  assert.strictEqual(auth.lockedFor(ip), 0);
+  const t = auth.createSession();
+  assert.ok(auth.isValidSession(t));
+  auth.endSession(t);
+  assert.ok(!auth.isValidSession(t));
+  assert.ok(!auth.isValidSession(undefined));
 });
