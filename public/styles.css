@@ -47,7 +47,16 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .empty { color: var(--muted); text-align: center; padding: 24px 8px; }
 
 .map-notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); background: var(--bg); }
-.info h3 { margin: 0 0 4px; font-size: 14px; } .info p { margin: 2px 0; font-size: 12px; }
+/* Map overlays sit on Google's light map, so they use fixed colors in both themes. */
+.info { color: #1d2330; max-width: 240px; }
+.info h3 { margin: 0 0 4px; font-size: 14px; } .info p { margin: 2px 0; font-size: 12px; color: #4a5263; }
+.info a { color: #1a73e8; }
+.pin { position: relative; width: 32px; height: 42px; cursor: pointer; transform-origin: 50% 100%; transition: transform .12s; }
+.pin svg { position: absolute; inset: 0; width: 100%; height: 100%; filter: drop-shadow(0 2px 2px rgba(0,0,0,.35)); }
+.pin path { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+.pin-glyph { position: absolute; top: 4px; left: 0; right: 0; text-align: center; font-size: 16px; line-height: 22px; }
+.pin.selected { transform: scale(1.3); }
+.pin.selected path { fill: #1d2330; }
 
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; grid-template-rows: 45vh auto; height: auto; }

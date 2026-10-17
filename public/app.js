@@ -15,7 +15,7 @@ const ICONS = {
   Japanese: '🍣', Chinese: '🥟', Korean: '🍲', Thai: '🍜', Vietnamese: '🍜', Indian: '🍛', Italian: '🍝',
   Mexican: '🌮', Pizza: '🍕', Burgers: '🍔', Barbecue: '🍖', Cafe: '☕', Drinks: '🧋', Bakery: '🥐',
   Seafood: '🦐', Steakhouse: '🥩', Sandwiches: '🥪', Vegetarian: '🥗', Breakfast: '🥞', Dessert: '🍨',
-  'Middle Eastern': '🥙', Mediterranean: '🫒', Greek: '🥙', French: '🥖', American: '🍔', 'Fast food': '🍟',
+  Dumpling: '🥟', Noodles: '🍜', 'Middle Eastern': '🥙', Mediterranean: '🫒', Greek: '🥙', French: '🥖', American: '🍔', 'Fast food': '🍟',
 };
 const iconFor = c => ICONS[c] || '🍽️';
 
@@ -149,17 +149,26 @@ function renderMarkers(items) {
   for (const r of items) {
     let m = map.markers.get(r.id);
     if (!m) {
-      const el = document.createElement('div');
-      el.textContent = iconFor(r.cuisine);
-      el.style.cssText = 'font-size:22px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))';
-      m = new map.AdvancedMarker({ map: map.instance, position: latLng(r), title: r.name, content: el, gmpClickable: true });
+      m = new map.AdvancedMarker({ map: map.instance, position: latLng(r), title: r.name, content: pinElement(), gmpClickable: true });
       m.addEventListener('gmp-click', () => select(r.id, { fromMap: true }));
       map.markers.set(r.id, m);
     } else {
-      m.content.textContent = iconFor(r.cuisine);
       m.map = map.instance;
     }
+    const selected = r.id === state.selectedId;
+    m.content.querySelector('.pin-glyph').textContent = iconFor(r.cuisine);
+    m.content.classList.toggle('selected', selected);
+    m.zIndex = selected ? 1000 : null;
   }
+}
+
+// A map pin (teardrop) with the food-type icon inside; its tip is the
+// element's bottom center, which is where Advanced Markers anchor content.
+function pinElement() {
+  const el = document.createElement('div');
+  el.className = 'pin';
+  el.innerHTML = `<svg viewBox="0 0 32 42" aria-hidden="true"><path d="M16 41C16 41 2 25.5 2 15.5a14 14 0 0 1 28 0C30 25.5 16 41 16 41z"/></svg><span class="pin-glyph"></span>`;
+  return el;
 }
 
 function fitToVisible() {
