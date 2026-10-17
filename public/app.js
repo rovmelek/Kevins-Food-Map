@@ -112,25 +112,32 @@ function loadMap() {
     showMapNotice('<div><b>Map not configured.</b><br>Set GOOGLE_MAPS_API_KEY in .env and restart the server.<br>The list on the left still works.</div>');
     return;
   }
-  window.gm_authFailure = () => showMapNotice('<div><b>Google rejected the Maps API key.</b><br>Check that Maps JavaScript API is enabled and the key allows this site.</div>');
-  window.__initMap = async () => {
-    const { Map, InfoWindow } = await google.maps.importLibrary('maps');
-    const { AdvancedMarkerElement } = await google.maps.importLibrary('marker');
-    map.AdvancedMarker = AdvancedMarkerElement;
-    map.instance = new Map($('map'), {
-      center: latLng(state.origin || state.config.office), zoom: 12, mapId: state.config.mapId,
-      mapTypeControl: false, streetViewControl: false,
-    });
-    map.info = new InfoWindow();
-    map.api = google.maps;
-    renderList();
-    fitToVisible();
-  };
+  window.gm_authFailure = () => showMapNotice(`<div><b>Google rejected the Maps API key.</b><br>
+    Check that billing and Maps JavaScript API are enabled, and that the key's Websites restriction includes
+    <code>${esc(location.origin)}</code>. The browser console (F12) names the exact error.</div>`);
+  window.__initMap = () => initMap().catch(err => {
+    console.error(err);
+    showMapNotice(`<div><b>The map failed to start.</b><br>${esc(err.message)}</div>`);
+  });
   const s = document.createElement('script');
   s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=__initMap`;
   s.async = true;
   s.onerror = () => showMapNotice('<div>Could not load Google Maps. Check your connection.</div>');
   document.head.appendChild(s);
+}
+
+async function initMap() {
+  const { Map, InfoWindow } = await google.maps.importLibrary('maps');
+  const { AdvancedMarkerElement } = await google.maps.importLibrary('marker');
+  map.AdvancedMarker = AdvancedMarkerElement;
+  map.instance = new Map($('map'), {
+    center: latLng(state.origin || state.config.office), zoom: 12, mapId: state.config.mapId,
+    mapTypeControl: false, streetViewControl: false,
+  });
+  map.info = new InfoWindow();
+  map.api = google.maps;
+  renderList();
+  fitToVisible();
 }
 
 const latLng = r => ({ lat: r.lat, lng: r.lng });

@@ -192,7 +192,8 @@ function createServer() {
 if (require.main === module) {
   loadStore();
   createServer().listen(PORT, HOST, () => {
-    console.log(`NASC Food running at http://${HOST}:${PORT}`);
+    const shown = HOST === '127.0.0.1' || HOST === '0.0.0.0' ? 'localhost' : HOST;
+    console.log(`NASC Food running at http://${shown}:${PORT}`);
     if (!BROWSER_KEY) console.warn('  ! No GOOGLE_MAPS_API_KEY: the map will not load (list still works).');
     if (!SERVER_KEY) console.warn('  ! No Places key: added restaurants will have name and pin only, no phone/address.');
     if (OFFICE.placeholder) console.warn('  ! OFFICE_LAT/OFFICE_LNG missing or invalid: using a placeholder office location.');
