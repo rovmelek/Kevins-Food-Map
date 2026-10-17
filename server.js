@@ -21,12 +21,12 @@ const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'restaur
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BULK = 100;
 
-// PLACEHOLDER until the real NASC office address is known.
 const officeLat = parseFloat(process.env.OFFICE_LAT), officeLng = parseFloat(process.env.OFFICE_LNG);
 const officeSet = Math.abs(officeLat) <= 90 && Math.abs(officeLng) <= 180;
 const OFFICE = officeSet
   ? { name: process.env.OFFICE_NAME || 'NASC office', lat: officeLat, lng: officeLng, placeholder: false }
-  : { name: 'NASC office (placeholder location)', lat: 45.6387, lng: -122.6615, placeholder: true };
+  // Default when .env has no office: center of ZIP 98683, Vancouver WA (zippopotam.us).
+  : { name: 'NASC area (ZIP 98683)', lat: 45.6032, lng: -122.5133, placeholder: true };
 
 function loadDotEnv(file) {
   if (!fs.existsSync(file)) return;
@@ -196,7 +196,7 @@ if (require.main === module) {
     console.log(`NASC Food running at http://${shown}:${PORT}`);
     if (!BROWSER_KEY) console.warn('  ! No GOOGLE_MAPS_API_KEY: the map will not load (list still works).');
     if (!SERVER_KEY) console.warn('  ! No Places key: added restaurants will have name and pin only, no phone/address.');
-    if (OFFICE.placeholder) console.warn('  ! OFFICE_LAT/OFFICE_LNG missing or invalid: using a placeholder office location.');
+    if (OFFICE.placeholder) console.warn('  ! OFFICE_LAT/OFFICE_LNG missing or invalid: using the ZIP 98683 default location.');
   });
 }
 
