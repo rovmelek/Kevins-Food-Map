@@ -84,19 +84,19 @@ test('enriches from Places and ignores a same-named place far away', async () =>
   const placesBody = (lat) => JSON.stringify({ places: [{
     id: 'ChIJtest', displayName: { text: 'Szechuan Brothers' }, formattedAddress: '123 Main St, Vancouver, WA',
     nationalPhoneNumber: '(360) 555-0100', location: { latitude: lat, longitude: -122.5346 },
-    types: ['chinese_restaurant', 'restaurant'], googleMapsUri: 'https://maps.google.com/?cid=1',
+    types: ['chinese_restaurant', 'restaurant'], googleMapsUri: 'https://maps.google.com/?cid=1', rating: 4.6, userRatingCount: 312,
   }] });
   let lat = 45.61765;
   const f = fakeFetch((u, o) => {
     if (u === SHORT) return { status: 302, headers: { location: LONG } };
     if (u.startsWith('https://places.googleapis.com/')) {
       assert.strictEqual(o.headers['X-Goog-Api-Key'], 'k');
-      assert.ok(o.headers['X-Goog-FieldMask'].includes('places.nationalPhoneNumber'));
+      assert.ok(['places.nationalPhoneNumber', 'places.rating', 'places.userRatingCount'].every(f => o.headers['X-Goog-FieldMask'].includes(f)));
       return { status: 200, body: placesBody(lat) };
     }
   });
   const r = await resolveLink(SHORT, { apiKey: 'k', fetchImpl: f });
-  assert.deepStrictEqual([r.enriched, r.phone, r.placeId, r.cuisine], [true, '(360) 555-0100', 'ChIJtest', 'Chinese']);
+  assert.deepStrictEqual([r.enriched, r.phone, r.placeId, r.cuisine, r.rating, r.ratingCount], [true, '(360) 555-0100', 'ChIJtest', 'Chinese', 4.6, 312]);
 
   lat = 47.6; // Seattle, ~220 km away: not the place in the link
   await assert.rejects(resolveLink(SHORT, { apiKey: 'k', fetchImpl: f }), /Google has no place called "Szechuan Brothers Chinese Restaurant"/);

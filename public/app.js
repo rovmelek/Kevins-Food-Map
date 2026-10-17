@@ -26,6 +26,16 @@ const ICONS = {
 };
 const iconFor = c => ICONS[c] || '🍽️';
 
+// Google's star rating as five stars filled to the exact value, plus the
+// review count, linking to the place on Google Maps where the reviews are.
+function ratingHtml(r) {
+  if (r.rating == null) return '';
+  const pct = Math.max(0, Math.min(100, r.rating / 5 * 100));
+  const count = r.ratingCount != null ? ` (${r.ratingCount.toLocaleString()})` : '';
+  return `<a class="rating" href="${esc(r.mapsUrl)}" target="_blank" rel="noopener" title="Google rating ${r.rating} of 5 from ${r.ratingCount ?? 'unknown'} reviews">` +
+    `<span class="rating-num">${r.rating.toFixed(1)}</span><span class="stars" style="--pct:${pct}%" aria-hidden="true">★★★★★</span>${count}</a>`;
+}
+
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -94,6 +104,7 @@ function renderList() {
         <div class="icon" aria-hidden="true">${iconFor(r.cuisine)}</div>
         <div>
           <p class="name">${esc(r.name)}</p>
+          ${r.rating != null ? `<p class="meta">${ratingHtml(r)}</p>` : ''}
           <p class="meta">${r.phone ? `📞 <a href="tel:${esc(r.phone.replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : '📞 Phone not available'}</p>
           <p class="meta">📍 ${r.address ? esc(r.address) : 'Address not available'}</p>
         </div>
@@ -103,6 +114,8 @@ function renderList() {
         </div>
       </li>`).join('');
   }
+  // Google's attribution, shown whenever a rating is on screen.
+  $('ratingNote').hidden = !items.some(r => r.rating != null);
   renderMarkers(items);
 }
 
@@ -248,7 +261,7 @@ function select(id, { fromMap = false, toggle = true } = {}) {
   if (fromMap) document.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   if (!map.instance || !r) return;
   map.instance.panTo(latLng(r));
-  map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(r.mapsUrl)}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
+  map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${r.rating != null ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(r.mapsUrl)}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
   map.info.setPosition(latLng(r));
   map.info.open({ map: map.instance });
 }
@@ -412,7 +425,7 @@ function renderEditList() {
   tool('all').textContent = `Select all (${items.length})`;
   tool('all').disabled = !items.length || n === items.length;
   tool('none').disabled = !n;
-  for (const [t, label, show] of [['archive', 'Archive', !inArchive], ['restore', 'Restore', inArchive], ['purge', 'Delete forever', inArchive]]) {
+  for (const [t, label, show] of [['refresh', 'Update from Google', !inArchive && state.config.placesEnabled], ['archive', 'Archive', !inArchive], ['restore', 'Restore', inArchive], ['purge', 'Delete forever', inArchive]]) {
     tool(t).hidden = !show;
     tool(t).disabled = !n;
     tool(t).textContent = n ? `${label} (${n})` : label;
@@ -464,8 +477,27 @@ async function onEditClick(e) {
 
 async function onEditTool(tool) {
   $('editStatus').textContent = '';
+  $('editStatus').classList.remove('error');
   if (tool === 'all') editItems().forEach(r => state.checked.add(r.id));
   if (tool === 'none') state.checked.clear();
+  if (tool === 'refresh') {
+    // One Places lookup each, in turn, to pick up ratings and other changes.
+    const ids = [...state.checked], failed = [];
+    const btn = document.querySelector('#editPane [data-tool="refresh"]');
+    for (const [i, id] of ids.entries()) {
+      btn.textContent = `Updating ${i + 1} of ${ids.length}…`;
+      btn.disabled = true;
+      const r = state.restaurants.find(x => x.id === id);
+      try { Object.assign(r, (await api(`/api/restaurants/${id}/refresh`, { method: 'POST' })).restaurant); }
+      catch (err) { failed.push(`${r.name}: ${err.message}`); }
+    }
+    state.checked.clear();
+    renderAll();
+    const ok = ids.length - failed.length;
+    $('editStatus').textContent = `Updated ${ok} restaurant${ok === 1 ? '' : 's'} from Google.` + (failed.length ? ` Failed: ${failed.join('; ')}` : '');
+    $('editStatus').classList.toggle('error', failed.length > 0);
+    return;
+  }
   if (tool === 'archive' || tool === 'restore' || tool === 'purge') {
     const n = state.checked.size, s = n === 1 ? '' : 's';
     if (tool === 'purge' && !confirm(`Permanently delete ${n} archived restaurant${s}? This can't be undone.`)) return;

@@ -73,6 +73,8 @@ Links are checked before anything is added. Anything that isn't a Google Maps li
 
 Without a Places key, cards still get the name and pin from the link, with no phone or address. Once a key works, "↻ Details" in Manage → Restaurants looks it up again.
 
+Cards show Google's star rating and review count when Places has them, with Google's attribution under the list. They are saved when a restaurant is added, so they don't update by themselves: tick restaurants in Manage → Restaurants and press **Update from Google** to fetch fresh ones (one lookup each). Restaurants added before ratings existed need this once. The rating comes in the same "Text Search Enterprise" lookup as the phone number, so it adds no cost (Text Search docs, checked 2026-10-17).
+
 ## Data
 
 Restaurants are stored in `data/restaurants.json`, shared by everyone who uses the same server, and tracked in git so the list moves with the code.
