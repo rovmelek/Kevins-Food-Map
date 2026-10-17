@@ -12,7 +12,7 @@ npm start                 # http://127.0.0.1:3000
 npm test
 ```
 
-Location permission only works on `localhost` or HTTPS. If it is denied, the list is sorted from the office location in `.env`.
+Location permission only works on `localhost` or HTTPS. If it is denied, the list is sorted from the office location in `.env` (`OFFICE_LAT`, `OFFICE_LNG`), or from the center of ZIP 98683 if those are not set.
 
 ## Google setup
 
