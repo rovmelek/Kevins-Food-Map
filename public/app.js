@@ -260,27 +260,62 @@ function setMode(mode) {
   (mode === 'single' ? $('singleInput') : $('bulkInput')).focus();
 }
 
+function openAdd() {
+  $('addResults').innerHTML = '';
+  $('toast').hidden = true;
+  $('addDialog').showModal();
+  setMode(addMode);
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
+}
+
+// Adds the pasted link(s). If every link worked, close the dialog, report in
+// a toast and show the new place; otherwise keep it open with a line per
+// link, leaving only the failed links in the box to fix or retry.
 async function submitAdd(e) {
   e.preventDefault();
-  const text = addMode === 'single' ? $('singleInput').value : $('bulkInput').value;
+  const input = addMode === 'single' ? $('singleInput') : $('bulkInput');
   const out = $('addResults');
-  if (!text.trim()) return;
+  if (!input.value.trim()) return;
   $('addSubmit').disabled = true;
   out.innerHTML = '<li>Looking up places…</li>';
   try {
-    const { results } = await api('/api/restaurants', { method: 'POST', body: JSON.stringify({ text }) });
+    const { results } = await api('/api/restaurants', { method: 'POST', body: JSON.stringify({ text: input.value }) });
+    const added = results.filter(r => r.status === 'added');
+    const failed = results.filter(r => r.status === 'error');
+    if (added.length) {
+      state.restaurants = await api('/api/restaurants');
+      renderAll();
+    }
+    if (!failed.length) {
+      input.value = '';
+      out.innerHTML = '';
+      $('addDialog').close();
+      const dupes = results.length - added.length;
+      const warning = added.find(r => r.warning)?.warning;
+      toast([
+        added.length === 1 ? `Added ${added[0].restaurant.name}.` : added.length ? `Added ${added.length} restaurants.` : '',
+        dupes === 1 && results.length === 1 ? `${results[0].restaurant.name} is already listed.` : dupes ? `${dupes} already listed.` : '',
+        warning || '',
+      ].filter(Boolean).join(' '));
+      const focus = added.length === 1 ? added[0] : results.length === 1 ? results[0] : null;
+      if (focus) select(focus.restaurant.id, { fromMap: true }); else fitToVisible();
+      return;
+    }
     out.innerHTML = results.map(r => {
-      if (r.status === 'added') return `<li class="added">✓ Added ${esc(r.restaurant.name)}${r.warning ? ` (${esc(r.warning)})` : ''}</li>`;
+      if (r.status === 'added') return `<li class="added">✓ Added ${esc(r.restaurant.name)}</li>`;
       if (r.status === 'duplicate') return `<li class="duplicate">• Already listed: ${esc(r.restaurant.name)}</li>`;
       return `<li class="error">✕ ${esc(r.url)}: ${esc(r.error)}</li>`;
     }).join('');
-    if (results.some(r => r.status === 'added')) {
-      state.restaurants = await api('/api/restaurants');
-      if (addMode === 'single') $('singleInput').value = '';
-      else $('bulkInput').value = '';
-      renderAll();
-      fitToVisible();
-    }
+    if (addMode === 'bulk') input.value = failed.map(r => r.url).join('\n');
+    if (added.length) fitToVisible();
   } catch (err) {
     out.innerHTML = `<li class="error">✕ ${esc(err.message)}</li>`;
   } finally {
@@ -323,11 +358,10 @@ async function onListClick(e) {
 // ---- boot ------------------------------------------------------------------
 
 async function init() {
-  $('addToggle').onclick = () => {
-    const p = $('addPanel'); p.hidden = !p.hidden;
-    $('addToggle').setAttribute('aria-expanded', String(!p.hidden));
-    if (!p.hidden) setMode(addMode);
-  };
+  $('addToggle').onclick = openAdd;
+  $('addClose').onclick = () => $('addDialog').close();
+  // Clicking the dimmed backdrop (the dialog element itself) closes it.
+  $('addDialog').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => setMode(t.dataset.mode));
   $('addForm').onsubmit = submitAdd;
   $('search').oninput = e => { state.search = e.target.value; renderList(); };

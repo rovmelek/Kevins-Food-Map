@@ -11,21 +11,9 @@
     <aside class="left">
       <header class="top">
         <h1>NASC Food</h1>
-        <button id="addToggle" class="btn primary" aria-expanded="false" aria-controls="addPanel">+ Add</button>
+        <button id="addToggle" class="btn primary" aria-haspopup="dialog">+ Add</button>
       </header>
 
-      <section id="addPanel" class="add" hidden>
-        <div class="tabs" role="tablist">
-          <button role="tab" class="tab active" data-mode="single" aria-selected="true">One link</button>
-          <button role="tab" class="tab" data-mode="bulk" aria-selected="false">Bulk paste</button>
-        </div>
-        <form id="addForm">
-          <input id="singleInput" type="url" placeholder="https://maps.app.goo.gl/..." autocomplete="off">
-          <textarea id="bulkInput" rows="6" hidden placeholder="Paste Markdown or plain text with one or more Google Maps links, e.g.&#10;- [Szechuan Brothers](https://maps.app.goo.gl/v5wA1hGRb3JP2tYb8)&#10;- https://maps.app.goo.gl/..."></textarea>
-          <button class="btn primary" type="submit" id="addSubmit">Add</button>
-        </form>
-        <ul id="addResults" class="results"></ul>
-      </section>
 
       <div class="controls">
         <input id="search" type="search" placeholder="Search by name" aria-label="Search by name">
@@ -40,6 +28,23 @@
       <div id="mapNotice" class="map-notice" hidden></div>
     </main>
   </div>
+  <dialog id="addDialog" class="add-dialog" aria-labelledby="addTitle">
+    <header class="dialog-head">
+      <h2 id="addTitle">Add restaurants</h2>
+      <button type="button" id="addClose" class="icon-btn" aria-label="Close">✕</button>
+    </header>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" class="tab active" data-mode="single" aria-selected="true">One link</button>
+      <button type="button" role="tab" class="tab" data-mode="bulk" aria-selected="false">Bulk paste</button>
+    </div>
+    <form id="addForm">
+      <input id="singleInput" type="url" placeholder="https://maps.app.goo.gl/..." autocomplete="off" aria-label="Google Maps link">
+      <textarea id="bulkInput" rows="8" hidden aria-label="Google Maps links" placeholder="Paste Markdown or plain text with one or more Google Maps links, e.g.&#10;- [Szechuan Brothers](https://maps.app.goo.gl/v5wA1hGRb3JP2tYb8)&#10;- https://maps.app.goo.gl/..."></textarea>
+      <button class="btn primary" type="submit" id="addSubmit">Add</button>
+    </form>
+    <ul id="addResults" class="results"></ul>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="app.js"></script>
 </body>
 </html>

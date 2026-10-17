@@ -17,14 +17,20 @@ h1 { font-size: 20px; margin: 0; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn:disabled { opacity: .6; cursor: progress; }
 
-.add { margin: 0 16px 8px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.add-dialog { width: min(520px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+.add-dialog::backdrop { background: rgba(0,0,0,.45); }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.dialog-head h2 { margin: 0; font-size: 17px; }
+.icon-btn { border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.icon-btn:hover { color: var(--text); background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px)); padding: 10px 16px; border-radius: 10px; background: #1d2330; color: #fff; box-shadow: 0 6px 20px rgba(0,0,0,.3); z-index: 10; font-size: 13px; }
 .tabs { display: flex; gap: 4px; margin-bottom: 8px; }
-.tab { flex: 1; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: 5px; font: inherit; cursor: pointer; }
+.tab { flex: 1; border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 6px; padding: 5px; font: inherit; cursor: pointer; }
 .tab.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 #addForm { display: flex; flex-direction: column; gap: 6px; }
 input, select, textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); width: 100%; }
 textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
-.results { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; max-height: 140px; overflow: auto; }
+.results { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; max-height: 220px; overflow: auto; }
 .results li { padding: 2px 0; word-break: break-all; }
 .results .added { color: var(--ok); } .results .duplicate { color: var(--muted); } .results .error { color: var(--error); }
 
