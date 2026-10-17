@@ -202,6 +202,8 @@ async function initMap() {
     });
   }
   map.info = new InfoWindow({ pixelOffset: new google.maps.Size(0, -Math.round(PIN_HEIGHT * 1.3)) });
+  map.info.addListener('closeclick', deselect);   // the popup's ✕
+  map.instance.addListener('click', deselect);    // a click on empty map
   map.api = google.maps;
   renderList();
   fitToVisible();
@@ -214,7 +216,11 @@ const latLng = r => ({ lat: r.lat, lng: r.lng });
 function makePinOverlay(OverlayView) {
   return class PinOverlay extends OverlayView {
     constructor(position, el) { super(); this.position = position; this.el = el; }
-    onAdd() { this.getPanes().overlayMouseTarget.appendChild(this.el); }
+    onAdd() {
+      this.getPanes().overlayMouseTarget.appendChild(this.el);
+      // Keep pin clicks from also counting as a click on the map (which deselects).
+      OverlayView.preventMapHitsAndGesturesFrom?.(this.el);
+    }
     draw() {
       const p = this.getProjection().fromLatLngToDivPixel(this.position);
       if (p) { this.el.style.left = `${p.x}px`; this.el.style.top = `${p.y}px`; }
@@ -268,7 +274,16 @@ function fitToVisible() {
   map.instance.fitBounds(b, 40);
 }
 
-function select(id, { fromMap = false } = {}) {
+function deselect() {
+  if (!state.selectedId) return;
+  state.selectedId = null;
+  map.info?.close();
+  renderList();
+}
+
+// Selecting the restaurant that's already selected clears it instead.
+function select(id, { fromMap = false, toggle = true } = {}) {
+  if (toggle && state.selectedId === id) { deselect(); return; }
   state.selectedId = id;
   const r = state.restaurants.find(x => x.id === id);
   renderList();
@@ -354,7 +369,7 @@ async function submitAdd(e) {
         warning || '',
       ].filter(Boolean).join(' '));
       const focus = added.length === 1 ? added[0] : results.length === 1 ? results[0] : null;
-      if (focus) select(focus.restaurant.id, { fromMap: true }); else fitToVisible();
+      if (focus) select(focus.restaurant.id, { fromMap: true, toggle: false }); else fitToVisible();
       return;
     }
     out.innerHTML = results.map(r => {
@@ -426,6 +441,7 @@ async function init() {
     if (state.selecting) e.target.click(); else select(e.target.dataset.id);
   };
   $('listTools').onclick = e => onToolClick(e).catch(err => alert(err.message));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('addDialog').open) deselect(); });
 
   [state.config, state.restaurants] = await Promise.all([api('/api/config'), api('/api/restaurants')]);
   useOffice();
