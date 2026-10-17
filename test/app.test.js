@@ -146,6 +146,18 @@ test('HTTP API: add (bulk), dedupe, filter data, edit, delete, persistence', asy
     const onDisk = JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8'));
     assert.strictEqual(onDisk.length, 1);
 
+    const [sb, bad] = await j('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids: 'x' }) });
+    assert.strictEqual(sb, 400, bad.error);
+    await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ text: 'https://www.google.com/maps/place/A/@1,1,17z https://www.google.com/maps/place/B/@2,2,17z' }) });
+    const [, three] = await j('/api/restaurants');
+    assert.strictEqual(three.length, 3);
+    const [, del] = await j('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids: [three[1].id, three[2].id, 'no-such-id'] }) });
+    assert.strictEqual(del.deleted, 2);
+    const [, left] = await j('/api/restaurants');
+    assert.deepStrictEqual(left.map(r => r.id), [three[0].id]);
+    await new Promise(r => setTimeout(r, 50));
+    assert.strictEqual(JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')).length, 1);
+
     const [, cfg] = await j('/api/config');
     assert.strictEqual(cfg.office.placeholder, true);
     const trav = await fetch(base + '/..%2fserver.js');

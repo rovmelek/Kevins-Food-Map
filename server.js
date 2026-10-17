@@ -130,6 +130,17 @@ async function handleApi(req, res, url) {
     return send(res, 200, { results });
   }
 
+  // Delete several at once: POST /api/restaurants/delete { ids: [...] }
+  if (parts.length === 3 && parts[2] === 'delete' && req.method === 'POST') {
+    const body = await readJson(req);
+    if (!Array.isArray(body.ids) || !body.ids.every(id => typeof id === 'string')) return send(res, 400, { error: 'ids must be a list of restaurant ids' });
+    const ids = new Set(body.ids);
+    const before = restaurants.length;
+    restaurants = restaurants.filter(r => !ids.has(r.id));
+    if (restaurants.length !== before) await saveStore();
+    return send(res, 200, { deleted: before - restaurants.length });
+  }
+
   const idx = restaurants.findIndex(r => r.id === parts[2]);
   if (idx === -1) return send(res, 404, { error: 'Restaurant not found' });
 

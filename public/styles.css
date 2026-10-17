@@ -39,6 +39,16 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .origin { margin: 4px 16px 6px; color: var(--muted); font-size: 12px; }
 .origin button { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
 
+.list-tools { display: flex; align-items: center; gap: 10px; margin: 0 16px 8px; min-height: 28px; font-size: 13px; }
+.list-tools .spacer { flex: 1; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+.link-btn:disabled { color: var(--muted); cursor: default; }
+.btn.small { padding: 4px 10px; font-size: 12px; }
+.btn.danger { background: var(--error); border-color: var(--error); color: #fff; font-weight: 600; }
+.list.selecting .card { grid-template-columns: 18px 34px 1fr auto; }
+.list.selecting .del, .list.selecting [data-act="refresh"] { display: none; }
+.card.checked { border-color: var(--error); background: color-mix(in srgb, var(--error) 10%, var(--panel)); }
+.check { width: 16px; height: 16px; margin: 9px 0 0; padding: 0; accent-color: var(--error); cursor: pointer; }
 .list { list-style: none; margin: 0; padding: 0 16px 16px; overflow-y: auto; flex: 1; }
 .card { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: var(--panel); }
 .card:hover, .card.selected { background: var(--hover); border-color: var(--accent); }

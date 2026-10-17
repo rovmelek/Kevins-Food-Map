@@ -8,6 +8,8 @@ const state = {
   search: '',
   cuisine: '',
   selectedId: null,
+  selecting: false,   // select mode: cards show checkboxes for bulk delete
+  checked: new Set(),
 };
 const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null };
 
@@ -75,14 +77,60 @@ function renderOrigin() {
   }
 }
 
+function renderTools(items) {
+  const el = $('listTools');
+  if (!state.restaurants.length) { el.innerHTML = ''; return; }
+  if (!state.selecting) {
+    el.innerHTML = '<button type="button" class="link-btn" data-tool="select">Select</button>';
+    return;
+  }
+  const n = state.checked.size;
+  el.innerHTML = `
+    <button type="button" class="link-btn" data-tool="all" ${n === items.length ? 'disabled' : ''}>Select all (${items.length})</button>
+    <button type="button" class="link-btn" data-tool="none" ${n ? '' : 'disabled'}>Select none</button>
+    <span class="spacer"></span>
+    <button type="button" class="btn danger small" data-tool="delete" ${n ? '' : 'disabled'}>Delete${n ? ` (${n})` : ''}</button>
+    <button type="button" class="btn small" data-tool="done">Done</button>`;
+}
+
+async function onToolClick(e) {
+  const tool = e.target.closest('[data-tool]')?.dataset.tool;
+  if (!tool) return;
+  const items = visible();
+  if (tool === 'select') state.selecting = true;
+  if (tool === 'done') { state.selecting = false; state.checked.clear(); }
+  if (tool === 'all') items.forEach(r => state.checked.add(r.id));
+  if (tool === 'none') state.checked.clear();
+  if (tool === 'delete') {
+    const n = state.checked.size;
+    const all = n === state.restaurants.length;
+    if (!confirm(all ? `Delete all ${n} restaurants? This can't be undone.` : `Delete ${n} restaurant${n === 1 ? '' : 's'}? This can't be undone.`)) return;
+    const ids = [...state.checked];
+    const { deleted } = await api('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids }) });
+    state.restaurants = state.restaurants.filter(r => !state.checked.has(r.id));
+    if (state.checked.has(state.selectedId)) { state.selectedId = null; map.info?.close(); }
+    state.checked.clear();
+    if (!state.restaurants.length) state.selecting = false;
+    toast(`Deleted ${deleted} restaurant${deleted === 1 ? '' : 's'}.`);
+  }
+  renderAll();
+}
+
 function renderList() {
   const items = visible();
+  // Only restaurants you can see stay checked, so a delete never hits
+  // something hidden by the search or filter.
+  const shown = new Set(items.map(r => r.id));
+  for (const id of state.checked) if (!shown.has(id)) state.checked.delete(id);
+  renderTools(items);
   const list = $('list');
+  list.classList.toggle('selecting', state.selecting);
   if (!items.length) {
     list.innerHTML = `<li class="empty">${state.restaurants.length ? 'No restaurants match.' : 'No restaurants yet. Use “+ Add” to paste Google Maps links.'}</li>`;
   } else {
     list.innerHTML = items.map(r => `
-      <li class="card${r.id === state.selectedId ? ' selected' : ''}" data-id="${esc(r.id)}" tabindex="0">
+      <li class="card${r.id === state.selectedId ? ' selected' : ''}${state.checked.has(r.id) ? ' checked' : ''}" data-id="${esc(r.id)}" tabindex="0">
+        ${state.selecting ? `<input type="checkbox" class="check" data-act="check" aria-label="Select ${esc(r.name)}" ${state.checked.has(r.id) ? 'checked' : ''}>` : ''}
         <div class="icon" aria-hidden="true">${iconFor(r.cuisine)}</div>
         <div>
           <p class="name">${esc(r.name)}</p>
@@ -329,6 +377,12 @@ async function onListClick(e) {
   const id = card.dataset.id;
   const r = state.restaurants.find(x => x.id === id);
   const act = e.target.closest('[data-act]')?.dataset.act;
+  // In select mode a click anywhere on the card (except links) toggles it.
+  if (state.selecting && !e.target.closest('a')) {
+    if (state.checked.has(id)) state.checked.delete(id); else state.checked.add(id);
+    renderList();
+    return;
+  }
   if (act === 'cuisine') {
     const next = prompt(`Food type for ${r.name}:`, r.cuisine);
     if (next && next.trim() && next.trim() !== r.cuisine) {
@@ -367,7 +421,11 @@ async function init() {
   $('search').oninput = e => { state.search = e.target.value; renderList(); };
   $('cuisineFilter').onchange = e => { state.cuisine = e.target.value; renderList(); fitToVisible(); };
   $('list').onclick = e => onListClick(e).catch(err => alert(err.message));
-  $('list').onkeydown = e => { if (e.key === 'Enter' && e.target.classList.contains('card')) select(e.target.dataset.id); };
+  $('list').onkeydown = e => {
+    if (e.key !== 'Enter' || !e.target.classList.contains('card')) return;
+    if (state.selecting) e.target.click(); else select(e.target.dataset.id);
+  };
+  $('listTools').onclick = e => onToolClick(e).catch(err => alert(err.message));
 
   [state.config, state.restaurants] = await Promise.all([api('/api/config'), api('/api/restaurants')]);
   useOffice();
