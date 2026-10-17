@@ -57,7 +57,7 @@ One key is enough: put it in `GOOGLE_MAPS_API_KEY`, and under **API restrictions
 
 Cost (Google pricing page, checked 2026-10-17): asking for the phone number puts each lookup in the "Text Search Enterprise" SKU, with 1,000 free per month and $35 per 1,000 after. The app looks up a place once when it is added, not on every page view. Map loads are billed separately under Maps JavaScript API.
 
-The map hides Google's own places, transit and road icons so the restaurant pins stand out, using built-in style settings that need no extra setup. If you set `GOOGLE_MAPS_MAP_ID`, Google ignores those settings and uses the style attached to that map ID in Cloud console instead.
+When zoomed out, the map hides Google's own places, transit and road icons so the restaurant pins stand out; from zoom level 16 in (`DETAIL_ZOOM` in `public/app.js`) it shows Google's normal map so nearby businesses are visible again. This uses built-in style settings that need no extra setup. If you set `GOOGLE_MAPS_MAP_ID`, Google ignores those settings and uses the style attached to that map ID in Cloud console instead.
 
 ## How a link becomes a card
 

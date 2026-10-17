@@ -126,9 +126,11 @@ function loadMap() {
   document.head.appendChild(s);
 }
 
-// Hide Google's own places, transit and road icons so only our pins stand
-// out; street names stay. JSON styles only apply when no map ID is set (with
-// GOOGLE_MAPS_MAP_ID, style the map in Cloud console instead).
+// Zoomed out, hide Google's own places, transit and road icons so only our
+// pins stand out; from DETAIL_ZOOM in, show Google's normal map so nearby
+// businesses and stops are visible. JSON styles only apply when no map ID is
+// set (with GOOGLE_MAPS_MAP_ID, style the map in Cloud console instead).
+const DETAIL_ZOOM = 16;
 const QUIET_STYLE = [
   { featureType: 'poi', stylers: [{ visibility: 'off' }] },
   { featureType: 'transit', stylers: [{ visibility: 'off' }] },
@@ -144,6 +146,13 @@ async function initMap() {
     ...(state.config.mapId ? { mapId: state.config.mapId } : { styles: QUIET_STYLE }),
     clickableIcons: false, mapTypeControl: false, streetViewControl: false,
   });
+  if (!state.config.mapId) {
+    let detailed = false;
+    map.instance.addListener('zoom_changed', () => {
+      const want = map.instance.getZoom() >= DETAIL_ZOOM;
+      if (want !== detailed) { detailed = want; map.instance.setOptions({ styles: want ? [] : QUIET_STYLE }); }
+    });
+  }
   map.info = new InfoWindow({ pixelOffset: new google.maps.Size(0, -Math.round(PIN_HEIGHT * 1.3)) });
   map.api = google.maps;
   renderList();
