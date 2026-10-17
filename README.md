@@ -57,7 +57,7 @@ One key is enough: put it in `GOOGLE_MAPS_API_KEY`, and under **API restrictions
 
 Cost (Google pricing page, checked 2026-10-17): asking for the phone number puts each lookup in the "Text Search Enterprise" SKU, with 1,000 free per month and $35 per 1,000 after. The app looks up a place once when it is added, not on every page view. Map loads are billed separately under Maps JavaScript API.
 
-`DEMO_MAP_ID` is the default map ID. Google documents it for testing; create your own map ID (JavaScript type) for real use and set `GOOGLE_MAPS_MAP_ID`.
+The map hides Google's own places, transit and road icons so the restaurant pins stand out, using built-in style settings that need no extra setup. If you set `GOOGLE_MAPS_MAP_ID`, Google ignores those settings and uses the style attached to that map ID in Cloud console instead.
 
 ## How a link becomes a card
 

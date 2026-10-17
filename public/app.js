@@ -9,7 +9,7 @@ const state = {
   cuisine: '',
   selectedId: null,
 };
-const map = { api: null, instance: null, markers: new Map(), info: null, AdvancedMarker: null };
+const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null };
 
 const ICONS = {
   Japanese: '🍣', Chinese: '🥟', Korean: '🍲', Thai: '🍜', Vietnamese: '🍜', Indian: '🍛', Italian: '🍝',
@@ -126,15 +126,25 @@ function loadMap() {
   document.head.appendChild(s);
 }
 
+// Hide Google's own places, transit and road icons so only our pins stand
+// out; street names stay. JSON styles only apply when no map ID is set (with
+// GOOGLE_MAPS_MAP_ID, style the map in Cloud console instead).
+const QUIET_STYLE = [
+  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+  { featureType: 'road', elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+];
+const PIN_HEIGHT = 50;
+
 async function initMap() {
-  const { Map, InfoWindow } = await google.maps.importLibrary('maps');
-  const { AdvancedMarkerElement } = await google.maps.importLibrary('marker');
-  map.AdvancedMarker = AdvancedMarkerElement;
+  const { Map, InfoWindow, OverlayView } = await google.maps.importLibrary('maps');
+  map.PinOverlay = makePinOverlay(OverlayView);
   map.instance = new Map($('map'), {
-    center: latLng(state.origin || state.config.office), zoom: 12, mapId: state.config.mapId,
-    mapTypeControl: false, streetViewControl: false,
+    center: latLng(state.origin || state.config.office), zoom: 12,
+    ...(state.config.mapId ? { mapId: state.config.mapId } : { styles: QUIET_STYLE }),
+    clickableIcons: false, mapTypeControl: false, streetViewControl: false,
   });
-  map.info = new InfoWindow();
+  map.info = new InfoWindow({ pixelOffset: new google.maps.Size(0, -Math.round(PIN_HEIGHT * 1.3)) });
   map.api = google.maps;
   renderList();
   fitToVisible();
@@ -142,32 +152,52 @@ async function initMap() {
 
 const latLng = r => ({ lat: r.lat, lng: r.lng });
 
+// Our pins are plain HTML drawn on an OverlayView, so they work with or
+// without a map ID and look the same everywhere.
+function makePinOverlay(OverlayView) {
+  return class PinOverlay extends OverlayView {
+    constructor(position, el) { super(); this.position = position; this.el = el; }
+    onAdd() { this.getPanes().overlayMouseTarget.appendChild(this.el); }
+    draw() {
+      const p = this.getProjection().fromLatLngToDivPixel(this.position);
+      if (p) { this.el.style.left = `${p.x}px`; this.el.style.top = `${p.y}px`; }
+    }
+    onRemove() { this.el.remove(); }
+  };
+}
+
 function renderMarkers(items) {
   if (!map.instance) return;
   const keep = new Set(items.map(r => r.id));
-  for (const [id, m] of map.markers) if (!keep.has(id)) { m.map = null; map.markers.delete(id); }
+  for (const [id, m] of map.markers) if (!keep.has(id)) { m.setMap(null); map.markers.delete(id); }
   for (const r of items) {
     let m = map.markers.get(r.id);
     if (!m) {
-      m = new map.AdvancedMarker({ map: map.instance, position: latLng(r), title: r.name, content: pinElement(), gmpClickable: true });
-      m.addEventListener('gmp-click', () => select(r.id, { fromMap: true }));
+      const el = pinElement(r.name);
+      const open = e => { e.stopPropagation(); select(r.id, { fromMap: true }); };
+      el.addEventListener('click', open);
+      el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') open(e); });
+      m = new map.PinOverlay(new map.api.LatLng(r.lat, r.lng), el);
       map.markers.set(r.id, m);
-    } else {
-      m.map = map.instance;
     }
+    if (!m.getMap()) m.setMap(map.instance);
     const selected = r.id === state.selectedId;
-    m.content.querySelector('.pin-glyph').textContent = iconFor(r.cuisine);
-    m.content.classList.toggle('selected', selected);
-    m.zIndex = selected ? 1000 : null;
+    m.el.querySelector('.pin-glyph').textContent = iconFor(r.cuisine);
+    m.el.classList.toggle('selected', selected);
+    m.el.style.zIndex = selected ? 1000 : Math.round(1000 - r.lat * 10); // southern pins in front
   }
 }
 
-// A map pin (teardrop) with the food-type icon inside; its tip is the
-// element's bottom center, which is where Advanced Markers anchor content.
-function pinElement() {
+// A teardrop pin with the food-type icon in a white circle. CSS shifts it so
+// the tip sits on the restaurant's location.
+function pinElement(name) {
   const el = document.createElement('div');
   el.className = 'pin';
-  el.innerHTML = `<svg viewBox="0 0 32 42" aria-hidden="true"><path d="M16 41C16 41 2 25.5 2 15.5a14 14 0 0 1 28 0C30 25.5 16 41 16 41z"/></svg><span class="pin-glyph"></span>`;
+  el.title = name;
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  el.setAttribute('aria-label', name);
+  el.innerHTML = `<svg viewBox="0 0 40 50" aria-hidden="true"><path d="M20 49C20 49 2 30.5 2 19a18 18 0 0 1 36 0C38 30.5 20 49 20 49z"/><circle cx="20" cy="19" r="12.5"/></svg><span class="pin-glyph"></span>`;
   return el;
 }
 
@@ -189,7 +219,8 @@ function select(id, { fromMap = false } = {}) {
   if (!map.instance || !r) return;
   map.instance.panTo(latLng(r));
   map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(r.mapsUrl)}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
-  map.info.open({ map: map.instance, anchor: map.markers.get(id) });
+  map.info.setPosition(latLng(r));
+  map.info.open({ map: map.instance });
 }
 
 // ---- location --------------------------------------------------------------
