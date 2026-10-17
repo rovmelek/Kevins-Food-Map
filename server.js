@@ -6,7 +6,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { extractMapsLinks } = require('./lib/parse');
+const { findLinks } = require('./lib/parse');
 const { resolveLink } = require('./lib/resolve');
 const auth = require('./lib/auth');
 
@@ -75,13 +75,18 @@ function findDuplicate(rec) {
       Math.abs(r.lat - rec.lat) < 0.0005 && Math.abs(r.lng - rec.lng) < 0.0005));
 }
 
+// Archived restaurants stay in the file (with archivedAt) so they can be
+// restored; only the Manage window sees them.
+const active = () => restaurants.filter(r => !r.archivedAt);
+const archived = () => restaurants.filter(r => r.archivedAt);
+
 async function addFromLink(url) {
   const existingBySource = restaurants.find(r => r.sourceUrl === url);
-  if (existingBySource) return { url, status: 'duplicate', restaurant: existingBySource };
+  if (existingBySource) return restoreIfArchived(url, existingBySource);
   try {
     const rec = await resolveLink(url, { apiKey: SERVER_KEY });
     const dup = findDuplicate(rec);
-    if (dup) return { url, status: 'duplicate', restaurant: dup };
+    if (dup) return restoreIfArchived(url, dup);
     const { warning, ...stored } = rec;
     const restaurant = { id: crypto.randomUUID(), ...stored, cuisineManual: false, addedAt: new Date().toISOString() };
     restaurants.push(restaurant);
@@ -90,6 +95,21 @@ async function addFromLink(url) {
   } catch (e) {
     return { url, status: 'error', error: e.message };
   }
+}
+
+// Adding something that was archived brings it back instead of duplicating it.
+async function restoreIfArchived(url, r) {
+  if (!r.archivedAt) return { url, status: 'duplicate', restaurant: r };
+  delete r.archivedAt;
+  await saveStore();
+  return { url, status: 'restored', restaurant: r };
+}
+
+function readIds(body) {
+  if (!Array.isArray(body.ids) || !body.ids.every(id => typeof id === 'string')) {
+    throw Object.assign(new Error('ids must be a list of restaurant ids'), { status: 400 });
+  }
+  return new Set(body.ids);
 }
 
 // ---- http ------------------------------------------------------------------
@@ -173,30 +193,48 @@ async function handleApi(req, res, url) {
   if (parts[1] === 'auth') return handleAuth(req, res, parts[2]);
   if (parts[1] !== 'restaurants') return send(res, 404, { error: 'Not found' });
 
-  if (parts.length === 2 && req.method === 'GET') return send(res, 200, restaurants);
+  if (parts.length === 2 && req.method === 'GET') return send(res, 200, active());
 
   // Everything below changes the list: only for a logged-in admin.
   if (!isLoggedIn(req)) return send(res, 401, { error: 'Log in to manage restaurants.' });
 
   if (parts.length === 2 && req.method === 'POST') {
     const body = await readJson(req);
-    const links = extractMapsLinks(body.text ?? body.url ?? '');
-    if (!links.length) return send(res, 400, { error: 'No Google Maps links found. Links look like https://maps.app.goo.gl/...' });
+    const { maps: links, other } = findLinks(body.text ?? body.url ?? '');
+    if (!links.length) {
+      return send(res, 400, { error: other.length
+        ? "That isn't a Google Maps link. In Google Maps, open the restaurant, tap Share and copy the link (https://maps.app.goo.gl/...)."
+        : 'No Google Maps links found. Links look like https://maps.app.goo.gl/...' });
+    }
     if (links.length > MAX_BULK) return send(res, 400, { error: `Too many links at once (max ${MAX_BULK}).` });
     const results = [];
     for (const link of links) results.push(await addFromLink(link)); // sequential: gentle on Google
+    for (const link of other) results.push({ url: link, status: 'skipped', error: 'Not a Google Maps link' });
     return send(res, 200, { results });
   }
 
-  // Delete several at once: POST /api/restaurants/delete { ids: [...] }
-  if (parts.length === 3 && parts[2] === 'delete' && req.method === 'POST') {
-    const body = await readJson(req);
-    if (!Array.isArray(body.ids) || !body.ids.every(id => typeof id === 'string')) return send(res, 400, { error: 'ids must be a list of restaurant ids' });
-    const ids = new Set(body.ids);
-    const before = restaurants.length;
-    restaurants = restaurants.filter(r => !ids.has(r.id));
-    if (restaurants.length !== before) await saveStore();
-    return send(res, 200, { deleted: before - restaurants.length });
+  if (parts.length === 3 && parts[2] === 'archived' && req.method === 'GET') return send(res, 200, archived());
+
+  // Archive, restore, or permanently delete several at once: POST
+  // /api/restaurants/{archive|restore|purge} { ids: [...] }. Purge only
+  // removes restaurants that are already archived.
+  if (parts.length === 3 && ['archive', 'restore', 'purge'].includes(parts[2]) && req.method === 'POST') {
+    const ids = readIds(await readJson(req));
+    const now = new Date().toISOString();
+    let changed = 0;
+    if (parts[2] === 'purge') {
+      const before = restaurants.length;
+      restaurants = restaurants.filter(r => !(ids.has(r.id) && r.archivedAt));
+      changed = before - restaurants.length;
+    } else {
+      for (const r of restaurants) {
+        if (!ids.has(r.id) || !!r.archivedAt === (parts[2] === 'archive')) continue;
+        if (parts[2] === 'archive') r.archivedAt = now; else delete r.archivedAt;
+        changed++;
+      }
+    }
+    if (changed) await saveStore();
+    return send(res, 200, { changed });
   }
 
   const idx = restaurants.findIndex(r => r.id === parts[2]);
@@ -226,10 +264,10 @@ async function handleApi(req, res, url) {
     await saveStore();
     return send(res, 200, r);
   }
-  if (req.method === 'DELETE') {
-    const [removed] = restaurants.splice(idx, 1);
-    await saveStore();
-    return send(res, 200, removed);
+  if (req.method === 'DELETE') { // archives; see /purge for a real delete
+    const r = restaurants[idx];
+    if (!r.archivedAt) { r.archivedAt = new Date().toISOString(); await saveStore(); }
+    return send(res, 200, r);
   }
   return send(res, 405, { error: 'Method not allowed' });
 }

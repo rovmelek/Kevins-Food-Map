@@ -37,7 +37,7 @@
     </header>
 
     <form id="loginView" class="login" hidden>
-      <p id="loginHint" class="hint">Enter the admin password to add, edit or delete restaurants.</p>
+      <p id="loginHint" class="hint">Enter the admin password to add, edit or archive restaurants.</p>
       <input id="password" type="password" autocomplete="current-password" aria-label="Admin password" placeholder="Admin password">
       <button class="btn primary" type="submit" id="loginSubmit">Log in</button>
       <p id="loginError" class="form-error" role="alert"></p>
@@ -63,12 +63,18 @@
       </section>
 
       <section id="editPane" hidden>
+        <div class="subtabs">
+          <label><input type="radio" name="editShow" value="listed" checked> Listed <span id="listedCount"></span></label>
+          <label><input type="radio" name="editShow" value="archived"> Archived <span id="archivedCount"></span></label>
+        </div>
         <input id="editSearch" type="search" placeholder="Search by name" aria-label="Search restaurants to manage">
         <div class="list-tools">
           <button type="button" class="link-btn" data-tool="all">Select all</button>
           <button type="button" class="link-btn" data-tool="none">Select none</button>
           <span class="spacer"></span>
-          <button type="button" class="btn danger small" data-tool="delete">Delete</button>
+          <button type="button" class="btn small" data-tool="archive">Archive</button>
+          <button type="button" class="btn small" data-tool="restore" hidden>Restore</button>
+          <button type="button" class="btn danger small" data-tool="purge" hidden>Delete forever</button>
         </div>
         <p id="editStatus" class="status-line" role="status"></p>
         <ul id="editList" class="edit-list"></ul>

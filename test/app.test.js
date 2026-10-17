@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { extractMapsLinks, parseMapsUrl, deriveCuisine, classifyUrl } = require('../lib/parse');
+const { extractMapsLinks, findLinks, isFoodPlace, parseMapsUrl, deriveCuisine, classifyUrl } = require('../lib/parse');
 const { resolveLink, expandShortLink } = require('../lib/resolve');
 const auth = require('../lib/auth');
 
@@ -98,22 +98,32 @@ test('enriches from Places and ignores a same-named place far away', async () =>
   const r = await resolveLink(SHORT, { apiKey: 'k', fetchImpl: f });
   assert.deepStrictEqual([r.enriched, r.phone, r.placeId, r.cuisine], [true, '(360) 555-0100', 'ChIJtest', 'Chinese']);
 
-  lat = 47.6; // Seattle, ~220 km away
-  const far = await resolveLink(SHORT, { apiKey: 'k', fetchImpl: f });
-  assert.strictEqual(far.enriched, false);
-  assert.strictEqual(far.lat, 45.6176318);
-  assert.match(far.warning, /no matching place/);
+  lat = 47.6; // Seattle, ~220 km away: not the place in the link
+  await assert.rejects(resolveLink(SHORT, { apiKey: 'k', fetchImpl: f }), /Google has no place called "Szechuan Brothers Chinese Restaurant"/);
 });
 
-test('reports Places API errors as a warning, not a failure', async () => {
+test('rejects places that are not restaurants, and map links that are not places', async () => {
+  const shop = { places: [{ id: 'ChIJshop', displayName: { text: 'Fred Meyer' }, location: { latitude: 45.61765, longitude: -122.5346 },
+    types: ['grocery_store', 'food', 'store'], primaryType: 'grocery_store' }] };
+  const f = fakeFetch(u => u === SHORT ? { status: 302, headers: { location: LONG } } : { status: 200, body: JSON.stringify(shop) });
+  await assert.rejects(resolveLink(SHORT, { apiKey: 'k', fetchImpl: f }), /Fred Meyer is listed on Google as a grocery store, not a restaurant/);
+  for (const t of [['coffee_shop'], ['sushi_restaurant', 'food'], ['bar']]) assert.ok(isFoodPlace(t), t.join());
+  for (const t of [['food', 'store'], ['gas_station'], []]) assert.ok(!isFoodPlace(t), t.join());
+
+  const noFetch = fakeFetch(() => null);
+  await assert.rejects(resolveLink('https://www.google.com/maps/@45.6,-122.5,15z', { fetchImpl: noFetch }), /map location, not a place/);
+  await assert.rejects(resolveLink('https://www.google.com/maps/dir/A/B', { fetchImpl: noFetch }), /map location, not a place/);
+  await assert.rejects(resolveLink('https://example.com/maps/place/X', { fetchImpl: noFetch }), /Not a Google Maps link/);
+  assert.deepStrictEqual(findLinks(`${LONG} https://example.com/x https://goo.gl.evil.com/maps`).other, ['https://example.com/x', 'https://goo.gl.evil.com/maps']);
+});
+
+test("fails (doesn't add unchecked) when Google can't be asked", async () => {
   const f = fakeFetch(u => u === SHORT ? { status: 302, headers: { location: LONG } }
     : { status: 403, body: JSON.stringify({ error: { message: 'API key not valid' } }) });
-  const r = await resolveLink(SHORT, { apiKey: 'bad', fetchImpl: f });
-  assert.strictEqual(r.enriched, false);
-  assert.match(r.warning, /403.*API key not valid/);
+  await assert.rejects(resolveLink(SHORT, { apiKey: 'bad', fetchImpl: f }), /Couldn't check this place with Google \(Places API error 403: API key not valid\)/);
 });
 
-test('HTTP API: add (bulk), dedupe, filter data, edit, delete, persistence', async () => {
+test('HTTP API: add (bulk), dedupe, edit, archive, restore, purge, persistence', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nascfood-'));
   process.env.DATA_FILE = path.join(dir, 'r.json');
   for (const k of ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY', 'OFFICE_LAT', 'OFFICE_LNG', 'OFFICE_NAME', 'TRUST_PROXY']) delete process.env[k];
@@ -140,13 +150,17 @@ test('HTTP API: add (bulk), dedupe, filter data, edit, delete, persistence', asy
     assert.doesNotMatch(setCookie, /Secure/, 'no Secure flag over plain http');
     cookie = setCookie.split(';')[0];
     assert.deepStrictEqual((await j('/api/auth/session'))[1], { passwordSet: true, loggedIn: true });
-    const form = await fetch(base + '/api/restaurants/delete', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'text/plain' }, body: '{"ids":[]}' });
+    const form = await fetch(base + '/api/restaurants/archive', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'text/plain' }, body: '{"ids":[]}' });
     assert.strictEqual(form.status, 415, 'non-JSON writes are refused');
 
     const text = `- [a](${LONG})\n- https://www.google.com/maps/place/Pho+Hung/@45.6,-122.6,17z\n- ${LONG}\n- https://example.com`;
     const [s1, b1] = await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ text }) });
     assert.strictEqual(s1, 200);
-    assert.deepStrictEqual(b1.results.map(r => r.status), ['added', 'added']); // duplicate link deduped by extractor
+    assert.deepStrictEqual(b1.results.map(r => r.status), ['added', 'added', 'skipped']); // duplicate link deduped by extractor
+    assert.strictEqual(b1.results[2].url, 'https://example.com');
+    const [s4, b4] = await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ url: 'https://www.yelp.com/biz/x' }) });
+    assert.strictEqual(s4, 400);
+    assert.match(b4.error, /isn't a Google Maps link/);
     const [, b2] = await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ url: LONG }) });
     assert.strictEqual(b2.results[0].status, 'duplicate');
     const [s3] = await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ text: 'nothing here' }) });
@@ -161,26 +175,40 @@ test('HTTP API: add (bulk), dedupe, filter data, edit, delete, persistence', asy
     assert.strictEqual(sr, 200);
     assert.strictEqual(refreshed.restaurant.cuisine, 'Noodles', 'manual food type survives a refresh');
     assert.match(refreshed.warning, /No Places API key/);
+    const disk = async () => { await new Promise(r => setTimeout(r, 50)); return JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')); };
+    // DELETE archives: gone from the public list, still in the file.
     await j(`/api/restaurants/${list[0].id}`, { method: 'DELETE' });
-    await new Promise(r => setTimeout(r, 50));
-    const onDisk = JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8'));
-    assert.strictEqual(onDisk.length, 1);
+    assert.strictEqual((await j('/api/restaurants'))[1].length, 1);
+    assert.strictEqual((await disk()).length, 2);
+    const [, arch] = await j('/api/restaurants/archived');
+    assert.deepStrictEqual(arch.map(r => r.id), [list[0].id]);
+    assert.ok(arch[0].archivedAt);
+    // Adding an archived restaurant again restores it.
+    const [, again] = await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ url: list[0].sourceUrl }) });
+    assert.strictEqual(again.results[0].status, 'restored');
+    assert.strictEqual((await j('/api/restaurants'))[1].length, 2);
 
-    const [sb, bad] = await j('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids: 'x' }) });
+    const [sb, bad] = await j('/api/restaurants/archive', { method: 'POST', body: JSON.stringify({ ids: 'x' }) });
     assert.strictEqual(sb, 400, bad.error);
     await j('/api/restaurants', { method: 'POST', body: JSON.stringify({ text: 'https://www.google.com/maps/place/A/@1,1,17z https://www.google.com/maps/place/B/@2,2,17z' }) });
-    const [, three] = await j('/api/restaurants');
-    assert.strictEqual(three.length, 3);
-    const [, del] = await j('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids: [three[1].id, three[2].id, 'no-such-id'] }) });
-    assert.strictEqual(del.deleted, 2);
-    const [, left] = await j('/api/restaurants');
-    assert.deepStrictEqual(left.map(r => r.id), [three[0].id]);
-    await new Promise(r => setTimeout(r, 50));
-    assert.strictEqual(JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')).length, 1);
+    const [, four] = await j('/api/restaurants');
+    assert.strictEqual(four.length, 4);
+    const [, a1] = await j('/api/restaurants/archive', { method: 'POST', body: JSON.stringify({ ids: [four[1].id, four[2].id, four[3].id, 'no-such-id'] }) });
+    assert.strictEqual(a1.changed, 3);
+    assert.deepStrictEqual((await j('/api/restaurants'))[1].map(r => r.id), [four[0].id]);
+    // Purge only removes archived ones; the listed one survives.
+    const [, p1] = await j('/api/restaurants/purge', { method: 'POST', body: JSON.stringify({ ids: [four[0].id, four[1].id] }) });
+    assert.strictEqual(p1.changed, 1);
+    const [, r1] = await j('/api/restaurants/restore', { method: 'POST', body: JSON.stringify({ ids: [four[2].id] }) });
+    assert.strictEqual(r1.changed, 1);
+    assert.deepStrictEqual((await j('/api/restaurants'))[1].map(r => r.id).sort(), [four[0].id, four[2].id].sort());
+    assert.deepStrictEqual((await j('/api/restaurants/archived'))[1].map(r => r.id), [four[3].id]);
+    assert.strictEqual((await disk()).length, 3);
 
     // Logging out ends the session.
     await j('/api/auth/logout', { method: 'POST' });
-    assert.strictEqual((await j('/api/restaurants/delete', { method: 'POST', body: JSON.stringify({ ids: [] }) }))[0], 401);
+    assert.strictEqual((await j('/api/restaurants/archive', { method: 'POST', body: JSON.stringify({ ids: [] }) }))[0], 401);
+    assert.strictEqual((await j('/api/restaurants/archived'))[0], 401, 'the archive is admin-only');
     assert.strictEqual((await j('/api/auth/session'))[1].loggedIn, false);
 
     const [, cfg] = await j('/api/config');

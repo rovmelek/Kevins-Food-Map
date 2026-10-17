@@ -67,6 +67,8 @@ When zoomed out, the map hides Google's own places, transit and road icons so th
 1. `maps.app.goo.gl/...` is a redirect. The server follows it (browsers can't read cross-site redirects) and only ever follows it to Google Maps hosts.
 2. The long URL contains the place name and its pin (`!3d<lat>!4d<lng>`).
 3. The server searches Places for that name near the pin and keeps the result only if it is within 300 m, so a same-named place elsewhere is never picked.
+
+Links are checked before anything is added. Anything that isn't a Google Maps link is refused (in a bulk paste, other links are listed as skipped). A Maps link to a bare map position, a search or directions is refused because it doesn't name a place. With a Places key, the place must also exist on Google at the link's pin and have a food-and-drink type (any `*_restaurant`, cafe, bakery, bar, pub, dessert shop and the like; the list is `FOOD_TYPES` in `lib/parse.js`), so a grocery store or gas station is refused. If Google can't be reached, the link fails and can be retried rather than being added unchecked. Without a Places key only the link itself can be checked, and the result says so.
 4. Food type comes from the Places type (`chinese_restaurant` becomes Chinese), else from words in the name (Szechuan, sushi, pho...). Change it in Manage → Restaurants; manual choices survive a refresh.
 
 Without a Places key, cards still get the name and pin from the link, with no phone or address. Once a key works, "↻ Details" in Manage → Restaurants looks it up again.
@@ -77,7 +79,9 @@ Restaurants are stored in `data/restaurants.json`, shared by everyone who uses t
 
 ## Manage window and password
 
-Anyone can view the list and map. **Manage** asks for the admin password, then has two tabs: **Add** (one link or a bulk paste) and **Restaurants** (search, change food type, refresh details, select all/none, delete selected). The server checks the login on every add, edit and delete, so hiding the button is not the only protection.
+Anyone can view the list and map. **Manage** asks for the admin password, then has two tabs: **Add** (one link or a bulk paste) and **Restaurants** (search, change food type, refresh details, select all/none, archive). The server checks the login on every change, so hiding the button is not the only protection.
+
+Archiving hides a restaurant from the list and map but keeps it in `data/restaurants.json` with an `archivedAt` date. Under Restaurants → **Archived** you can restore it, or delete it forever (the only real delete, with a confirmation). Adding the link of an archived restaurant again restores it.
 
 - `npm run set-password` asks for the password twice (at least 10 characters) and writes only its hash to `ADMIN_PASSWORD_HASH` in `.env`. Restart the server after changing it. Until a password is set, nobody can make changes.
 - The hash is Argon2id (OWASP's first choice: 19 MiB memory, 2 passes) using Node's built-in `crypto.argon2`, which needs Node 24 or newer. On older Node it uses scrypt (OWASP's next choice, N=2^17). No packages are involved either way. A hash made on Node 24 won't verify on older Node; run `set-password` again if you downgrade.
