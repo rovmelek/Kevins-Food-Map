@@ -23,7 +23,7 @@ In Google Cloud Console, enable billing and these two APIs, then create a key:
 | Maps JavaScript API | the map and markers | browser |
 | Places API (New) | phone, address, food type for each pasted link | server |
 
-Create two keys. The browser key (`GOOGLE_MAPS_BROWSER_KEY`) is visible to anyone who opens the page, so give it the Websites restriction (e.g. `http://localhost:3000`) and only Maps JavaScript API. The server key (`GOOGLE_PLACES_SERVER_KEY`) gets only Places API (New), plus an IP address restriction once hosted; Google advises IP restrictions for server-side keys, and a Websites-restricted key is meant for browser calls.
+One key is enough: put it in `GOOGLE_MAPS_API_KEY`, and under **API restrictions** allow only Maps JavaScript API and Places API (New). The key is visible to anyone who opens the page, so before making the site public, either set daily quotas (which cap the damage if it's copied) or split it into two keys: `GOOGLE_MAPS_BROWSER_KEY` (Websites restriction, Maps JavaScript API only) and `GOOGLE_PLACES_SERVER_KEY` (IP address restriction, Places API (New) only). A single key can't carry both restrictions, because Google allows one application restriction per key and a Websites restriction is meant for browser calls.
 
 Cost (Google pricing page, checked 2026-10-17): asking for the phone number puts each lookup in the "Text Search Enterprise" SKU, with 1,000 free per month and $35 per 1,000 after. The app looks up a place once when it is added, not on every page view. Map loads are billed separately under Maps JavaScript API.
 
