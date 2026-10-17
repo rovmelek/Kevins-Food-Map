@@ -59,7 +59,7 @@
           <textarea id="bulkInput" rows="8" hidden aria-label="Google Maps links" placeholder="Paste Markdown or plain text with one or more Google Maps links, e.g.&#10;- [Szechuan Brothers](https://maps.app.goo.gl/v5wA1hGRb3JP2tYb8)&#10;- https://maps.app.goo.gl/..."></textarea>
           <button class="btn primary" type="submit" id="addSubmit">Add</button>
         </form>
-        <ul id="addResults" class="results"></ul>
+        <ul id="addResults" class="results" aria-live="polite"></ul>
       </section>
 
       <section id="editPane" hidden>
@@ -70,8 +70,13 @@
           <span class="spacer"></span>
           <button type="button" class="btn danger small" data-tool="delete">Delete</button>
         </div>
+        <p id="editStatus" class="status-line" role="status"></p>
         <ul id="editList" class="edit-list"></ul>
       </section>
+
+      <footer class="dialog-foot">
+        <button type="button" id="manageDone" class="btn">Done</button>
+      </footer>
     </div>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

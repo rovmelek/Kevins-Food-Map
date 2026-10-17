@@ -99,3 +99,6 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .edit-main .name, .edit-main .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edit-actions { display: flex; gap: 6px; }
 .icon.small { width: 26px; height: 26px; font-size: 14px; }
+.status-line { margin: 0 0 8px; min-height: 1em; font-size: 12px; color: var(--ok); }
+.status-line:empty { display: none; }
+.dialog-foot { display: flex; justify-content: flex-end; margin-top: 14px; }

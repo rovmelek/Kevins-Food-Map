@@ -282,6 +282,7 @@ function toast(msg) {
 async function openManage() {
   $('toast').hidden = true;
   $('addResults').innerHTML = '';
+  $('editStatus').textContent = '';
   $('loginError').textContent = '';
   const session = await api('/api/auth/session');
   state.loggedIn = session.loggedIn;
@@ -342,9 +343,8 @@ function onAddModeChange() {
   currentAddInput().focus();
 }
 
-// Adds the pasted link(s). If every link worked, close the window, report in
-// a toast and show the new place; otherwise keep it open with a line per
-// link, leaving only the failed links in the box to fix or retry.
+// Adds the pasted link(s) and lists the outcome of each in the window, which
+// stays open for more. Failed links stay in the box to fix or retry.
 async function submitAdd(e) {
   e.preventDefault();
   const input = currentAddInput();
@@ -360,27 +360,15 @@ async function submitAdd(e) {
       state.restaurants = await api('/api/restaurants');
       renderAll();
     }
-    if (!failed.length) {
-      input.value = '';
-      out.innerHTML = '';
-      $('manageDialog').close();
-      const dupes = results.length - added.length;
-      const warning = added.find(r => r.warning)?.warning;
-      toast([
-        added.length === 1 ? `Added ${added[0].restaurant.name}.` : added.length ? `Added ${added.length} restaurants.` : '',
-        dupes === 1 && results.length === 1 ? `${results[0].restaurant.name} is already listed.` : dupes ? `${dupes} already listed.` : '',
-        warning || '',
-      ].filter(Boolean).join(' '));
-      const focus = added.length === 1 ? added[0] : results.length === 1 ? results[0] : null;
-      if (focus) select(focus.restaurant.id, { fromMap: true, toggle: false }); else fitToVisible();
-      return;
-    }
+    // Stay open so more can be added; the result shows here and the map updates behind.
+    const warning = added.find(r => r.warning)?.warning;
     out.innerHTML = results.map(r => {
       if (r.status === 'added') return `<li class="added">✓ Added ${esc(r.restaurant.name)}</li>`;
       if (r.status === 'duplicate') return `<li class="duplicate">• Already listed: ${esc(r.restaurant.name)}</li>`;
       return `<li class="error">✕ ${esc(r.url)}: ${esc(r.error)}</li>`;
-    }).join('');
-    if (addMode() === 'bulk') input.value = failed.map(r => r.url).join('\n');
+    }).join('') + (warning ? `<li class="duplicate">${esc(warning)}</li>` : '');
+    input.value = failed.length && addMode() === 'bulk' ? failed.map(r => r.url).join('\n') : failed.length ? input.value : '';
+    input.focus();
     if (added.length) fitToVisible();
   } catch (err) {
     out.innerHTML = `<li class="error">✕ ${esc(err.message)}</li>`;
@@ -454,6 +442,7 @@ async function onEditClick(e) {
 }
 
 async function onEditTool(tool) {
+  $('editStatus').textContent = '';
   if (tool === 'all') editItems().forEach(r => state.checked.add(r.id));
   if (tool === 'none') state.checked.clear();
   if (tool === 'delete') {
@@ -465,7 +454,7 @@ async function onEditTool(tool) {
     if (state.checked.has(state.selectedId)) { state.selectedId = null; map.info?.close(); }
     state.checked.clear();
     renderAll();
-    toast(`Deleted ${deleted} restaurant${deleted === 1 ? '' : 's'}.`);
+    $('editStatus').textContent = `Deleted ${deleted} restaurant${deleted === 1 ? '' : 's'}.`;
     return;
   }
   renderEditList();
@@ -482,7 +471,7 @@ function onListClick(e) {
 async function init() {
   const dlg = $('manageDialog');
   $('manageBtn').onclick = () => openManage().catch(err => alert(err.message));
-  $('manageClose').onclick = () => dlg.close();
+  $('manageClose').onclick = $('manageDone').onclick = () => dlg.close();
   // Clicking the dimmed backdrop (the dialog element itself) closes it.
   dlg.addEventListener('click', e => { if (e.target === e.currentTarget) dlg.close(); });
   $('logoutBtn').onclick = () => logout().catch(err => alert(err.message));
