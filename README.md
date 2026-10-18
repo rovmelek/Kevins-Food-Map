@@ -260,7 +260,7 @@ Save with Ctrl+O and Enter, leave with Ctrl+X, then restart the app: `kevins-foo
 3. Open **Manage** and log in.
 4. Optional: `curl -I https://food.example.com` should show `200` on its first line. Run it from another computer if you can; on some hosts a server can't reach its own public address, so a failure from the server itself proves nothing.
 
-Before you tell people the address, read the key notes in [Google setup](#google-setup): if your Google key has a **Websites** restriction, it must include your new address (`https://food.example.com/*`), and a public site should have daily quotas on the key.
+Before you tell people the address, read [Google setup](#google-setup). A public site should use two keys: a map key with a **Websites** restriction that includes your new address (`https://food.example.com/*`), and a separate server key for Places. Don't put a Websites restriction on a single shared key; it blocks the Places lookups.
 
 #### When something goes wrong
 
@@ -269,7 +269,7 @@ Before you tell people the address, read the key notes in [Google setup](#google
 | The browser can't connect at all | Check Step 1 (`nslookup` shows your server's IP) and Step 2 (ports 80 and 443 open, also in the hosting company's firewall). Then look at Caddy's log: `sudo journalctl -u caddy -n 50 --no-pager`. |
 | A security or SSL error instead of the page | Caddy couldn't get the certificate yet, usually because of DNS or a closed port. Fix that, then run `sudo systemctl reload caddy` and look at the log (above). |
 | `systemctl status caddy` says `failed`, and the log says "address already in use" | Another web server has the ports. See the check at the start of Step 3, then run `sudo systemctl restart caddy`. |
-| The page loads, but the map stays grey or says Google Maps can't load | Your Google key's **Websites** restriction doesn't include the new address. In Google Cloud console, add `https://food.example.com/*` (with your domain) to it. Also check that Maps JavaScript API is enabled on the key and billing is turned on; see [Google setup](#google-setup). |
+| The page loads, but the map stays grey or says Google Maps can't load | Your map key's **Websites** restriction doesn't include the new address. In Google Cloud console, add `https://food.example.com/*` (with your domain) to it. Also check that Maps JavaScript API is enabled on the key and billing is turned on; see [Google setup](#google-setup). |
 | "502 Bad Gateway" | Caddy works, but the app isn't running. Run `kevins-food-map status`, and `kevins-food-map logs` for the reason. |
 | `caddy validate` shows an error | It names the line with the mistake. A missing `}` is the most common one. |
 | Wrong passwords lock out everybody at once | `TRUST_PROXY=1` is missing from `.env`, or the app wasn't restarted after adding it (Step 5). |
@@ -337,7 +337,7 @@ You type every command as your normal user. Commands with `sudo` in front ask fo
 
 | File or folder (in the app's folder) | What it holds |
 | --- | --- |
-| `.env` | Your Google key, the office location and the Manage password (as a hash). The app can read it but not change it. |
+| `.env` | Your Google keys, the office location and the Manage password (as a hash). The app can read it but not change it. |
 | `docker/.env` | Which user the containers run as. A different file from the `.env` above. |
 | `docker/Caddyfile` | Caddy's settings, with your domain name. |
 | `docker-data/app/` | The live restaurant list, `settings.json` and the daily backups. |
@@ -346,7 +346,7 @@ You type every command as your normal user. Commands with `sudo` in front ask fo
 **What you need first**
 - An Ubuntu server that is reachable from the internet.
 - A domain name you control, for example `food.example.com`. Wherever this guide says `food.yourdomain.com`, use your own name.
-- Your Google key ([Google setup](#google-setup)).
+- Your two Google keys, a map key and a server key ([Google setup](#google-setup)).
 
 #### Docker step 1: Make room on the server
 
@@ -428,7 +428,7 @@ cp .env.example .env && chmod 600 .env
 nano .env
 ```
 
-In `.env`, fill in `GOOGLE_MAPS_API_KEY` and the office location, as in [Configuration](#configuration). Leave out `HOST`, `PORT`, `TRUST_PROXY` and `DATA_FILE`: the Docker setup sets them itself, and ignores them in `.env`. Leave `ADMIN_PASSWORD_HASH` alone; step 7 fills it in. Save with Ctrl+O and Enter, leave with Ctrl+X.
+In `.env`, fill in `GOOGLE_MAPS_API_KEY` (the map key), `GOOGLE_PLACES_SERVER_KEY` (the server key; remove the `#` in front of that line) and the office location, as in [Configuration](#configuration) and [Google setup](#google-setup). Leave out `HOST`, `PORT`, `TRUST_PROXY` and `DATA_FILE`: the Docker setup sets them itself, and ignores them in `.env`. Leave `ADMIN_PASSWORD_HASH` alone; step 7 fills it in. Save with Ctrl+O and Enter, leave with Ctrl+X.
 
 If you are switching from the service, copy its `.env` instead of filling in a new one: `cp ~/Kevins-Food-Map-old/.env .env`. If the old folder belongs to a dedicated user (`/srv/kevins-food-map`), use `sudo cp /srv/kevins-food-map/.env .env && sudo chown "$USER": .env`.
 
@@ -494,7 +494,7 @@ docker compose ps
 
 `docker compose ps` lists `app` and `caddy`. Wait a few seconds and run it again, until `app` says `(healthy)`.
 
-Then check it as in [Step 6](#step-6-check-that-it-works) of the Caddy guide: open `https://food.yourdomain.com`, look for the padlock, and log in to **Manage**. Your Google key's **Websites** restriction must include the new address ([Google setup](#google-setup)).
+Then check it as in [Step 6](#step-6-check-that-it-works) of the Caddy guide: open `https://food.yourdomain.com`, look for the padlock, and log in to **Manage**. Your map key's **Websites** restriction must include the new address, and Places needs its own server key ([Google setup](#google-setup)).
 
 #### Docker: day-to-day commands
 
@@ -552,7 +552,7 @@ For a full backup of the server, keep a copy of `.env`, `docker/Caddyfile` and t
    scp -r you@old-server:Kevins-Food-Map/docker-data .
    chmod 600 .env
    ```
-4. Point the DNS record at the new server's IP address (Caddy guide, [Step 1](#step-1-point-your-domain-at-the-server)).
+4. Point the DNS record at the new server's IP address (Caddy guide, [Step 1](#step-1-point-your-domain-at-the-server)). In Google Cloud console, also change the server key's **IP addresses** to the new server's (`curl -4 ifconfig.me` there), or adding restaurants fails.
 5. On the new server, do steps 7 (only `docker compose build`) and 8.
 
 #### Docker: when something goes wrong
@@ -565,7 +565,9 @@ For a full backup of the server, keep a copy of `.env`, `docker/Caddyfile` and t
 | `caddy` keeps restarting, and its log says "address already in use" | Another web server has the ports; see Docker step 1. |
 | A security or SSL error instead of the page | Caddy couldn't get the certificate yet, usually because of DNS or a closed port (Docker step 2). Look at `docker compose logs caddy`, fix the cause, then `docker compose restart caddy`. |
 | "502 Bad Gateway" | Caddy works, but the app isn't running. `docker compose logs app` shows why. |
-| The map stays grey | The Google key's **Websites** restriction doesn't include the new address; see [Google setup](#google-setup). |
+| The map stays grey | The map key's **Websites** restriction doesn't include the new address; see [Google setup](#google-setup). |
+| Adding says `Requests from referer <empty> are blocked` | The key used for Places has a **Websites** restriction. Give Places its own server key; see [Google setup](#google-setup). |
+| Adding says the key has an `IP address restriction` that the call violates | The server key doesn't list the address the server calls Google from. Add the server's addresses (`curl -4 ifconfig.me` and `curl -6 ifconfig.me`) to the server key's **IP addresses**. |
 | You edited `.env` or the Caddyfile and nothing changed | Restart that container (see the table above). |
 
 The app's log lists each visitor's address. Visitors who arrive over IPv6 show up as one shared `172.x.x.x` address, because this setup doesn't give the containers IPv6. Then one such person's wrong passwords would lock all of them out of Manage. To avoid it, give your domain only an `A` record (IPv4), as in Step 1, and no `AAAA` record.
@@ -592,12 +594,16 @@ In Google Cloud console, enable billing and these two APIs, then create a key:
 | Maps JavaScript API | the map and its pins | the browser |
 | Places API (New) | name, phone, address, website, food type and rating for each added link | the server |
 
-**One key or two.** One key in `GOOGLE_MAPS_API_KEY` works; under **API restrictions** allow only those two APIs. The browser needs the key to draw the map, so anyone who opens the page can see it. Before making the site public, either set daily quotas on the key, or split it into two keys:
+**One key or two.** One key in `GOOGLE_MAPS_API_KEY` works for trying the app out; under **API restrictions** allow only those two APIs, and give it **no** application restriction. The browser needs the key to draw the map, so anyone who opens the page can see it, and with one key they could also run Places lookups on your bill. Google allows only one kind of application restriction per key, and the two callers need different ones: the map runs in visitors' browsers, which say which website they are on, while Places lookups come from your server, which doesn't. So a **Websites** restriction on a single key makes every add fail with `Requests from referer <empty> are blocked`.
 
-- `GOOGLE_MAPS_BROWSER_KEY`: a **Websites** restriction, Maps JavaScript API only.
-- `GOOGLE_PLACES_SERVER_KEY`: an **IP address** restriction, Places API (New) only.
+For a public site, use two keys (in Google Cloud console: **APIs & Services → Credentials**; **Create credentials → API key** makes a new one, and clicking a key's name opens its settings):
 
-A single key can't carry both restrictions, because Google allows one application restriction per key. With a single key and `TRUST_PROXY=1`, the server warns about this at startup.
+| Key | In `.env` | Application restriction | API restriction |
+| --- | --- | --- | --- |
+| Map key | `GOOGLE_MAPS_API_KEY` (or `GOOGLE_MAPS_BROWSER_KEY`) | **Websites**: `https://food.yourdomain.com/*` | Maps JavaScript API only |
+| Server key | `GOOGLE_PLACES_SERVER_KEY` | **IP addresses**: your server's public addresses (what `curl -4 ifconfig.me` prints on the server, plus `curl -6 ifconfig.me` if it prints one) | Places API (New) only |
+
+When `GOOGLE_PLACES_SERVER_KEY` is set, Places uses it and the map uses the other key. Restart the app after editing `.env`; Google may take up to 5 minutes to apply a key's new settings. With a single key and `TRUST_PROXY=1`, the server warns at startup. Daily quotas are a further safety net: **Google Maps Platform → Quotas**, choose **Places API (New)**, and lower **SearchTextRequest per day**.
 
 **Cost.** Asking Places for the phone number makes each lookup a "Text Search Enterprise" request, which Google bills per 1,000 after a monthly free allowance (see Google's Places pricing page for current numbers). The app looks a place up once when it is added, and again only when you press **Update from Google**, never on page views. The rating comes in the same request at no extra cost. Map loads are billed separately under Maps JavaScript API.
 
@@ -709,10 +715,12 @@ Conventions:
 
 | Problem | What to check |
 | --- | --- |
-| The map doesn't load | `GOOGLE_MAPS_API_KEY` is set, Maps JavaScript API is enabled, and the key's website restriction includes your address. The browser console shows Google's exact error. |
-| Restaurants have no phone or address | No Places key, or Places API (New) isn't enabled on it. Fix the key, then select them and press **Update from Google**. |
+| The map doesn't load | `GOOGLE_MAPS_API_KEY` (or `GOOGLE_MAPS_BROWSER_KEY`) is set, Maps JavaScript API is enabled, and the map key's **Websites** restriction includes your address. The browser console shows Google's exact error. |
+| Restaurants have no phone or address | No Places key is set. Set one, then select them and press **Update from Google**. (With a key that Google refuses, adding fails with Google's error instead.) |
+| Adding fails with an `IP address restriction` error | The server key doesn't list the address the server calls Google from. Add the server's addresses (`curl -4 ifconfig.me` and `curl -6 ifconfig.me`) to the server key's **IP addresses**. |
 | "Use my location" does nothing | Location sharing only works on `localhost` or HTTPS, and the visitor must allow it. |
 | Manage says no password is set | Run `kevins-food-map set-password` (or `npm run set-password`), then restart. With Docker: `docker compose run --rm set-password`, then `docker compose restart app`. |
+| Adding fails with `Requests from referer <empty> are blocked` | The key used for Places has a **Websites** restriction, which only works for the map. Give Places its own server key ([Google setup](#google-setup)). |
 | "Too many wrong passwords" | Wait 15 minutes, or restart the server to clear the lockout (with Docker: `docker compose restart app`). Behind a proxy, make sure `TRUST_PROXY=1` is set, or everyone shares the proxy's address. |
 | `/healthz` returns 503 | The last save failed; `kevins-food-map logs` shows why (usually disk space or permissions on `data/`). With Docker: `docker compose logs app`, and see [Docker: when something goes wrong](#docker-when-something-goes-wrong). |
 | A leftover `nasc-food` service from an older install | Remove it: `sudo systemctl disable --now nasc-food && sudo rm -f /etc/systemd/system/nasc-food.service /usr/local/bin/nasc-food && sudo systemctl daemon-reload`, then run `bin/kevins-food-map install`. |
