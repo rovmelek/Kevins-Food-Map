@@ -142,3 +142,21 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
   .edit-row { grid-template-columns: 16px 26px 1fr; }
   .edit-actions { grid-column: 3; }
 }
+
+/* Manage > Settings */
+.settings { display: flex; flex-direction: column; gap: 12px; }
+.settings fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.settings legend { font-weight: 600; padding: 0 4px; }
+.settings .choice { display: flex; align-items: baseline; gap: 8px; font-size: 13px; cursor: pointer; }
+.settings .choice input { width: auto; accent-color: var(--accent); }
+.settings-fields { display: flex; flex-direction: column; gap: 6px; margin-left: 22px; }
+.settings-fields label, .coords label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+.coords { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pick-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pick-row .hint { margin: 0; font-size: 12px; }
+#mapIdInput { margin-left: 22px; width: calc(100% - 22px); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.server-only { margin-top: 12px; font-size: 13px; }
+.server-only summary { cursor: pointer; color: var(--muted); }
+.server-only ul { margin: 6px 0 0; padding-left: 18px; }
+.server-only code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+.pick-notice { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; background: #1d2330; color: #fff; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,.3); z-index: 2; max-width: calc(100% - 32px); }

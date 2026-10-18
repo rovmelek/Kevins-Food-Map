@@ -38,6 +38,7 @@
     <main class="right">
       <div id="map"></div>
       <div id="mapNotice" class="map-notice" hidden></div>
+      <div id="pickNotice" class="pick-notice" hidden><span role="status">Click the map (or a restaurant pin) where the office is.</span> <button type="button" id="pickCancel" class="btn small">Cancel</button></div>
     </main>
   </div>
   <dialog id="manageDialog" class="add-dialog" aria-labelledby="manageTitle">
@@ -61,6 +62,7 @@
       <div class="tabs" role="tablist">
         <button type="button" role="tab" class="tab active" id="tabAdd" data-view="add" aria-selected="true" aria-controls="addPane">Add</button>
         <button type="button" role="tab" class="tab" id="tabRestaurants" data-view="restaurants" aria-selected="false" aria-controls="editPane" tabindex="-1">Restaurants</button>
+        <button type="button" role="tab" class="tab" id="tabSettings" data-view="settings" aria-selected="false" aria-controls="settingsPane" tabindex="-1">Settings</button>
       </div>
 
       <section id="addPane" role="tabpanel" aria-labelledby="tabAdd">
@@ -93,6 +95,40 @@
         </div>
         <p id="editStatus" class="status-line" role="status"></p>
         <ul id="editList" class="edit-list"></ul>
+      </section>
+
+      <section id="settingsPane" role="tabpanel" aria-labelledby="tabSettings" hidden>
+        <p id="settingsError" class="form-error" role="alert" hidden></p>
+        <form id="settingsForm" class="settings">
+          <fieldset aria-describedby="officeHint">
+            <legend>Office</legend>
+            <p class="hint" id="officeHint">Where distances are measured from when a visitor doesn't share their location.</p>
+            <label class="choice"><input type="radio" name="officeMode" value="default"> <span>Server default: <span id="officeDefault"></span></span></label>
+            <label class="choice"><input type="radio" name="officeMode" value="custom"> <span>This office:</span></label>
+            <div id="officeFields" class="settings-fields">
+              <label>Name <input id="officeName" maxlength="80" autocomplete="off"></label>
+              <div class="coords">
+                <label>Latitude <input id="officeLat" autocomplete="off" placeholder="45.6032"></label>
+                <label>Longitude <input id="officeLng" autocomplete="off" placeholder="-122.5133"></label>
+              </div>
+              <div class="pick-row"><button type="button" id="pickOffice" class="btn small">Pick on map</button> <span id="pickHint" class="hint" hidden>The map isn’t loaded, so type the latitude and longitude.</span></div>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Map style</legend>
+            <label class="choice"><input type="radio" name="mapMode" value="default"> <span>Server default: <span id="mapDefault"></span></span></label>
+            <label class="choice"><input type="radio" name="mapMode" value="builtin"> <span>Built-in clean style (no map ID)</span></label>
+            <label class="choice"><input type="radio" name="mapMode" value="custom"> <span>Map ID from Google Cloud:</span></label>
+            <input id="mapIdInput" maxlength="64" autocomplete="off" spellcheck="false" aria-label="Map ID">
+          </fieldset>
+          <button class="btn primary" type="submit" id="settingsSave">Save settings</button>
+          <p id="settingsStatus" class="status-line" role="status"></p>
+        </form>
+        <details class="server-only">
+          <summary>Set on the server only</summary>
+          <p class="hint">For safety these can't be changed here. Edit <code>.env</code> on the server, then run <code>kevins-food-map restart</code> (or restart <code>npm start</code>). The password: <code>kevins-food-map set-password</code>.</p>
+          <ul id="serverOnly"></ul>
+        </details>
       </section>
 
       <footer class="dialog-foot">

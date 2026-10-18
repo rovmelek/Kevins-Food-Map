@@ -17,7 +17,7 @@ npm test
 
 Other settings in `.env`: `PORT` (default 3000), `HOST` (default `127.0.0.1`, local only), `DATA_FILE` (default `data/restaurants.json`).
 
-Location permission only works on `localhost` or HTTPS. If it is denied, the list is sorted from the office location in `.env` (`OFFICE_LAT`, `OFFICE_LNG`), or from the center of ZIP 98683 if those are not set.
+Location permission only works on `localhost` or HTTPS. If it is denied, the list is sorted from the office location: the one set in Manage → **Settings**, else `OFFICE_LAT`/`OFFICE_LNG` in `.env`, else the center of ZIP 98683.
 
 ## Run on a server (VPS)
 
@@ -95,7 +95,11 @@ Restaurants are stored in `data/restaurants.json`, shared by everyone who uses t
 
 ## Manage window and password
 
-Anyone can view the list and map. **Manage** asks for the admin password, then has two tabs: **Add** (one link or a bulk paste) and **Restaurants** (search, change food type, refresh details, select all/none, archive). The server checks the login on every change, so hiding the button is not the only protection.
+Anyone can view the list and map. **Manage** asks for the admin password, then has three tabs: **Add** (one link or a bulk paste), **Restaurants** (search, change food type, refresh details, select all/none, archive) and **Settings** (below). The server checks the login on every change, so hiding the button is not the only protection.
+
+**Settings** changes the office (name and location, typed or picked on the map) and the map style (the server default, the built-in clean style, or a map ID). They are saved on the server in `data/settings.json`, override the `.env` values, and apply without a restart (a new map style after a page reload). "Server default" goes back to `.env`. That file is never committed (`.gitignore`; if you point `DATA_FILE` at another folder in the repo, ignore `settings.json` there too), `update` leaves it alone and `move` takes it along. If it is damaged, the server logs it, shows it in Settings and on `/healthz` (`"settings": "damaged"`, still 200), and runs on the `.env` values; the next save keeps the old file as `settings.json.bad-<date and time>`. The tab shows where each server default comes from (`.env` or an environment variable).
+
+Everything else stays in `.env` on purpose, and the tab only shows whether each one is set: the Google keys, the password (`set-password`), `HOST`, `PORT`, `TRUST_PROXY` and `DATA_FILE`. A wrong `HOST` or `PORT` would make the page unreachable to fix it from; `TRUST_PROXY` without a proxy would let anyone bypass the login lockout; `DATA_FILE` decides which file the server writes. Why each one: `docs/settings.md`.
 
 Archiving hides a restaurant from the list and map but keeps it in `data/restaurants.json` with an `archivedAt` date. Under Restaurants → **Archived** you can restore it, or delete it forever (the only real delete, with a confirmation). Adding the link of an archived restaurant again restores it.
 
@@ -103,5 +107,6 @@ Archiving hides a restaurant from the list and map but keeps it in `data/restaur
 - The hash is Argon2id (OWASP's first choice: 19 MiB memory, 2 passes) using Node's built-in `crypto.argon2`, which needs Node 24.7 or newer. On older Node it uses scrypt (OWASP's next choice, N=2^17). No packages are involved either way. A hash made with Argon2id won't verify on older Node; run `set-password` again if you downgrade. `set-password` leaves `.env` readable only by you.
 - A login lasts 12 hours in an HttpOnly, SameSite=Strict cookie, marked Secure when served over HTTPS. Sessions live in memory, so a restart logs you out.
 - Five wrong passwords from one address within 15 minutes lock it out for 15 minutes (IPv6 addresses count per /64). Every attempt counts before the password is checked, and only two checks run at once, so a burst of guesses can't get around the limit or overload the server. The trade-off: while someone floods the login from many addresses, your own login may answer "Busy, try again in a moment."; wait and retry, or block them at the proxy.
+- Changes must be JSON (which browsers can't send cross-site without permission), and a request a browser marks as cross-site (`Sec-Fetch-Site`) is refused.
 - The page sends a strict Content Security Policy (Google's recommended one for Maps), so injected scripts can't run, and it can't be framed by other sites.
 - Over plain HTTP the password crosses the network unencrypted, so use HTTPS (see the Caddy example above) anywhere but your own machine.

@@ -8,6 +8,9 @@
 data/*.tmp
 data/*.keep
 data/backups/
+# Set in Manage > Settings on each server; never committed (the repo is public)
+data/settings.json
+data/settings.json.bad-*
 
 node_modules/
 *.log

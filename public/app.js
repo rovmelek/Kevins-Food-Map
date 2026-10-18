@@ -11,14 +11,16 @@ const state = {
   selectedId: null,
   loggedIn: false,
   passwordSet: false,
-  manageView: 'add',   // 'add' | 'restaurants'
+  manageView: 'add',   // 'add' | 'restaurants' | 'settings'
+  settings: null,      // Manage > Settings as the server sent it; reloaded each time Manage opens
+  picking: false,      // choosing the office on the map (Manage is closed meanwhile)
   editSearch: '',
   checked: new Set(),  // ids ticked in the Manage list
   archived: [],        // archived restaurants, loaded only when logged in
   editShow: 'listed',  // 'listed' | 'archived'
   busy: false,         // a Manage action is running; other actions wait
 };
-const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null };
+const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null, mapId: null };
 
 const ICONS = {
   Japanese: '🍣', Chinese: '🥟', Korean: '🍲', Thai: '🍜', Vietnamese: '🍜', Indian: '🍛', Italian: '🍝',
@@ -258,6 +260,7 @@ async function initMap() {
     ...(state.config.mapId ? { mapId: state.config.mapId } : { styles: QUIET_STYLE }),
     clickableIcons: false, mapTypeControl: false, streetViewControl: false,
   });
+  map.mapId = state.config.mapId; // fixed for this map; a new one needs a page reload
   if (!map.keyRejected) $('mapNotice').hidden = true; // a slow load may have shown the timeout notice
   if (!state.config.mapId) {
     let detailed = false;
@@ -268,8 +271,9 @@ async function initMap() {
   }
   map.info = new InfoWindow({ pixelOffset: new google.maps.Size(0, -Math.round(PIN_HEIGHT * 1.3)) });
   map.info.addListener('closeclick', deselect);   // the popup's ✕
-  map.instance.addListener('click', deselect);    // a click on empty map
+  map.instance.addListener('click', e => (state.picking ? endPick(e.latLng) : deselect())); // a click on empty map
   map.api = google.maps;
+  syncPickButton();
   renderList();
   fitToVisible();
 }
@@ -302,7 +306,11 @@ function renderMarkers(items) {
     let m = map.markers.get(r.id);
     if (!m) {
       const el = pinElement();
-      const open = e => { e.preventDefault(); e.stopPropagation(); select(r.id, { fromMap: true }); };
+      const open = e => {
+        e.preventDefault(); e.stopPropagation();
+        if (state.picking) endPick({ lat: () => r.lat, lng: () => r.lng }); // the office can be at a restaurant
+        else select(r.id, { fromMap: true });
+      };
       el.addEventListener('click', open);
       el.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) open(e); });
       m = new map.PinOverlay(new map.api.LatLng(r.lat, r.lng), el);
@@ -398,19 +406,27 @@ function setStatus(msg, isError = false) {
 function showError(err) {
   if (err.handled) return;
   if (state.manageView === 'add') $('addResults').innerHTML = `<li class="error">✕ ${esc(err.message)}</li>`;
+  else if (state.manageView === 'settings') setSettingsStatus(err.message, true);
   else setStatus(err.message, true);
 }
 
 function focusManage() {
-  const target = !state.loggedIn ? $('password') : state.manageView === 'add' ? currentAddInput() : $('editSearch');
+  const target = !state.loggedIn ? $('password')
+    : state.manageView === 'add' ? currentAddInput()
+    : state.manageView === 'settings' ? (state.settings && document.querySelector('input[name=officeMode]:checked')) || (focusPendingSettings = true, $('tabSettings'))
+    : $('editSearch');
   target.focus();
 }
 
 async function openManage() {
+  if (state.picking) { endPick(null); return; } // back to the form as it was
   $('toast').hidden = true;
   $('addResults').innerHTML = '';
   setStatus('');
   $('loginError').textContent = '';
+  setSettingsStatus('');
+  state.settings = null;
+  $('settingsSave').disabled = true; // until the settings have loaded
   const session = await api('/api/auth/session');
   state.loggedIn = session.loggedIn;
   state.passwordSet = session.passwordSet;
@@ -436,7 +452,17 @@ function renderManage() {
   });
   $('addPane').hidden = state.manageView !== 'add';
   $('editPane').hidden = state.manageView !== 'restaurants';
+  $('settingsPane').hidden = state.manageView !== 'settings';
   renderEditList();
+  if (state.loggedIn && state.manageView === 'settings' && !state.settings && !settingsLoading) {
+    settingsLoading = true;
+    loadSettings().catch(showError).finally(() => {
+      settingsLoading = false;
+      // A load started before Manage was closed and reopened may have been
+      // for that earlier opening; make sure this one gets its settings.
+      if (!state.settings && $('manageDialog').open && state.manageView === 'settings' && state.loggedIn && !$('settingsStatus').textContent) renderManage();
+    });
+  }
 }
 
 // Tabs follow the ARIA tabs pattern: arrow keys, Home and End move between them.
@@ -476,8 +502,144 @@ async function logout() {
   state.loggedIn = false;
   state.checked.clear();
   state.archived = [];
+  state.settings = null;
   $('manageDialog').close();
   toast('Logged out.');
+}
+
+// ---- settings (office, map style) ------------------------------------------
+// Only the office and the map ID can be changed here; keys, the password and
+// network settings stay in .env on the server (the tab lists them).
+
+let settingsLoading = false;
+let focusPendingSettings = false; // openManage focused the tab only because the form wasn't loaded yet
+const SOURCE_TEXT = { environment: 'set (environment variable)', '.env': 'set in .env', 'not set': 'not set' };
+// Where a server default comes from, shown next to it.
+const DEFAULT_FROM = { environment: ' (from an environment variable)', '.env': ' (from .env)', invalid: ' (OFFICE_LAT/OFFICE_LNG are missing or invalid)', 'not set': '' };
+const radioValue = name => document.querySelector(`input[name=${name}]:checked`)?.value;
+const setRadio = (name, value) => { document.querySelector(`input[name=${name}][value=${value}]`).checked = true; };
+const officeText = o => (o.placeholder ? `${o.name} (built-in default)` : `${o.name} (${o.lat}, ${o.lng})`);
+
+function setSettingsStatus(msg, isError = false) {
+  $('settingsStatus').textContent = msg;
+  $('settingsStatus').classList.toggle('error', isError);
+}
+
+async function loadSettings() {
+  const s = await api('/api/settings');
+  if (!state.loggedIn || state.settings) return; // logged out, or already filled meanwhile
+  state.settings = s;
+  fillSettings();
+  // Move focus only if it is still where openManage left it while loading
+  // (not if the user has moved on, e.g. along the tabs).
+  if (focusPendingSettings && document.activeElement === $('tabSettings') && state.manageView === 'settings' && $('manageDialog').open) focusManage();
+  focusPendingSettings = false;
+}
+
+function fillSettings() {
+  const s = state.settings;
+  $('settingsError').hidden = !s.error;
+  $('settingsError').textContent = s.error ? `${s.error} The server is using its default values; saving here replaces the file.` : '';
+  $('officeDefault').textContent = officeText(s.office.default) + (DEFAULT_FROM[s.office.default.source] ?? '');
+  // The fields start from the value in use, so "This office" is easy to tweak.
+  const o = s.office.overridden || !s.office.default.placeholder ? s.office.value : null;
+  setRadio('officeMode', s.office.overridden ? 'custom' : 'default');
+  $('officeName').value = o ? o.name : '';
+  $('officeLat').value = o ? o.lat : '';
+  $('officeLng').value = o ? o.lng : '';
+  $('mapDefault').textContent = (s.mapId.default.value ? `map ID ${s.mapId.default.value}` : 'built-in clean style') + (DEFAULT_FROM[s.mapId.default.source] ?? '');
+  setRadio('mapMode', !s.mapId.overridden ? 'default' : s.mapId.value ? 'custom' : 'builtin');
+  $('mapIdInput').value = s.mapId.overridden ? s.mapId.value : '';
+  $('serverOnly').innerHTML = s.serverOnly.map(x => `<li><code>${esc(x.key)}</code>: ${esc(SOURCE_TEXT[x.source] || x.source)}</li>`).join('');
+  syncPickButton();
+  $('settingsSave').disabled = false;
+}
+
+function syncPickButton() {
+  $('pickOffice').disabled = !map.instance;
+  $('pickHint').hidden = !!map.instance;
+}
+
+// Pasting "45.6, -122.5" (as Google Maps copies it) into either box fills
+// both. Only on paste, and only with decimals, so typing "45,6" stays as typed.
+function onCoordPaste(e) {
+  const pair = (e.clipboardData?.getData('text') || '').match(/^\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*$/);
+  if (!pair) return;
+  e.preventDefault();
+  $('officeLat').value = pair[1];
+  $('officeLng').value = pair[2];
+  setRadio('officeMode', 'custom');
+}
+
+function readCoord(id, label, max) {
+  const text = $(id).value.trim();
+  const n = /^-?\d+(\.\d+)?$/.test(text) ? Number(text) : NaN; // plain decimals only (no 0x10, 1e1)
+  if (!Number.isFinite(n) || Math.abs(n) > max) throw new Error(`${label} must be a number from -${max} to ${max}, like 45.6032.`);
+  return n;
+}
+
+async function submitSettings(e) {
+  e.preventDefault();
+  setSettingsStatus('');
+  if (!state.settings) return; // not loaded yet (Save is disabled meanwhile)
+  const body = {};
+  const officeMode = radioValue('officeMode'), mapMode = radioValue('mapMode');
+  try {
+    if (officeMode === 'default') body.office = null;
+    else if (officeMode === 'custom') {
+      body.office = { name: $('officeName').value.trim(), lat: readCoord('officeLat', 'Latitude', 90), lng: readCoord('officeLng', 'Longitude', 180) };
+      if (!body.office.name) throw new Error('Enter a name for the office.');
+    }
+    if (mapMode === 'default') body.mapId = null;
+    else if (mapMode === 'builtin') body.mapId = '';
+    else if (mapMode === 'custom') {
+      body.mapId = $('mapIdInput').value.trim();
+      if (!body.mapId) throw new Error('Enter a map ID, or pick another map style.');
+    }
+  } catch (err) { setSettingsStatus(err.message, true); return; }
+  $('settingsSave').disabled = true;
+  try {
+    state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+    fillSettings();
+    state.config.office = state.settings.office.value;
+    state.config.mapId = state.settings.mapId.value;
+    if (!state.origin?.isUser) useOffice();
+    renderAll();
+    // The map ID is fixed when the map is created; the office applies now.
+    setSettingsStatus(map.instance && state.config.mapId !== map.mapId ? 'Saved. Reload the page to see the new map style.' : 'Saved.');
+  } catch (err) { showError(err); }
+  finally { $('settingsSave').disabled = !state.settings; }
+}
+
+// "Pick on map": Manage closes, the next click on the map sets the office's
+// latitude and longitude (not saved until Save), and Manage opens again.
+function startPick() {
+  if (!map.instance) return;
+  state.picking = true;
+  $('manageDialog').close();
+  $('pickNotice').hidden = false;
+  $('map').scrollIntoView({ block: 'nearest' }); // on a phone the map may be scrolled away
+  // Set the text after showing it, so screen readers announce it.
+  const msg = $('pickNotice').querySelector('[role=status]');
+  msg.textContent = '';
+  setTimeout(() => { msg.textContent = 'Click the map (or a restaurant pin) where the office is.'; }, 50);
+  map.instance.setOptions({ draggableCursor: 'crosshair' });
+  $('pickCancel').focus({ preventScroll: true });
+}
+
+function endPick(latLng) {
+  if (!state.picking) return;
+  state.picking = false;
+  $('pickNotice').hidden = true;
+  map.instance.setOptions({ draggableCursor: null });
+  if (latLng) {
+    setRadio('officeMode', 'custom');
+    $('officeLat').value = latLng.lat().toFixed(6);
+    $('officeLng').value = latLng.lng().toFixed(6);
+    setSettingsStatus('Location picked. Save settings to keep it.');
+  }
+  $('manageDialog').showModal();
+  (!latLng ? $('pickOffice') : $('officeName').value.trim() ? $('settingsSave') : $('officeName')).focus();
 }
 
 const addMode = () => document.querySelector('input[name=addMode]:checked').value;
@@ -762,7 +924,9 @@ async function init() {
   // Clicking the dimmed backdrop closes the window; a drag that merely ends
   // there (e.g. selecting text in a field) doesn't.
   let downOnBackdrop = false, upOnBackdrop = false;
-  dlg.addEventListener('mousedown', e => { downOnBackdrop = e.target === dlg; });
+  dlg.addEventListener('mousedown', e => { downOnBackdrop = e.target === dlg; focusPendingSettings = false; });
+  dlg.addEventListener('keydown', () => { focusPendingSettings = false; }); // the user is moving on their own
+  dlg.addEventListener('focusin', e => { if (e.target !== $('tabSettings')) focusPendingSettings = false; });
   dlg.addEventListener('mouseup', e => { upOnBackdrop = e.target === dlg; });
   dlg.addEventListener('click', e => { if (e.target === dlg && downOnBackdrop && upOnBackdrop) dlg.close(); downOnBackdrop = upOnBackdrop = false; });
   $('logoutBtn').onclick = () => logout().catch(err => toast(err.message));
@@ -773,6 +937,13 @@ async function init() {
   });
   document.querySelectorAll('input[name=addMode]').forEach(r => r.onchange = onAddModeChange);
   $('addForm').onsubmit = submitAdd;
+  $('settingsForm').onsubmit = submitSettings;
+  $('officeLat').oninput = $('officeLng').oninput = () => setRadio('officeMode', 'custom');
+  $('officeLat').onpaste = $('officeLng').onpaste = onCoordPaste;
+  $('officeName').oninput = () => setRadio('officeMode', 'custom');
+  $('mapIdInput').oninput = () => setRadio('mapMode', 'custom');
+  $('pickOffice').onclick = startPick;
+  $('pickCancel').onclick = () => endPick(null);
   document.querySelectorAll('input[name=editShow]').forEach(r => r.onchange = () => {
     state.editShow = r.value; state.checked.clear(); setStatus(''); renderEditList();
   });
@@ -803,6 +974,8 @@ async function init() {
   $('list').onclick = onListClick;
   // Escape closes the filter panel if it's open, else clears the selection.
   document.addEventListener('keydown', e => {
+    // preventDefault: otherwise this same Escape also closes the reopened Manage window.
+    if (e.key === 'Escape' && state.picking) { e.preventDefault(); endPick(null); return; }
     if (e.key !== 'Escape' || dlg.open) return;
     if (!$('filterPanel').hidden) { toggleFilterPanel(false); $('filterBtn').focus(); } else deselect();
   });

@@ -9,8 +9,11 @@ const crypto = require('crypto');
 const { findLinks } = require('./lib/parse');
 const { resolveLink } = require('./lib/resolve');
 const { createStore } = require('./lib/store');
+const { createSettings } = require('./lib/settings');
 const auth = require('./lib/auth');
 
+// Which variables came from the real environment rather than .env (shown in Settings).
+const FROM_ENV = new Set(Object.keys(process.env));
 // Only when started as the app, so tests aren't affected by a local .env.
 if (require.main === module) loadDotEnv(path.join(__dirname, '.env'));
 
@@ -18,7 +21,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '127.0.0.1';
 const BROWSER_KEY = process.env.GOOGLE_MAPS_BROWSER_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
 const SERVER_KEY = process.env.GOOGLE_PLACES_SERVER_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
-const MAP_ID = process.env.GOOGLE_MAPS_MAP_ID || '';
+const ENV_MAP_ID = process.env.GOOGLE_MAPS_MAP_ID || '';
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'restaurants.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BULK = 100;
@@ -34,7 +37,7 @@ const MAX_CONCURRENT_LOGINS = 2;
 
 const officeLat = parseFloat(process.env.OFFICE_LAT), officeLng = parseFloat(process.env.OFFICE_LNG);
 const officeSet = Math.abs(officeLat) <= 90 && Math.abs(officeLng) <= 180;
-const OFFICE = officeSet
+const ENV_OFFICE = officeSet
   ? { name: process.env.OFFICE_NAME || 'NASC office', lat: officeLat, lng: officeLng, placeholder: false }
   // Default when .env has no office: center of ZIP 98683, Vancouver WA (zippopotam.us).
   : { name: 'NASC area (ZIP 98683)', lat: 45.6032, lng: -122.5133, placeholder: true };
@@ -49,6 +52,48 @@ function loadDotEnv(file) {
     const quoted = m[2].match(/^(['"])(.*?)\1(\s+#.*)?$/);
     process.env[m[1]] = quoted ? quoted[2] : m[2].replace(/(^|\s+)#.*$/, '');
   }
+}
+
+// ---- settings ----------------------------------------------------------------
+
+// Set in Manage > Settings; each one overrides its .env value. Kept next to
+// the restaurant list, so tests (which point DATA_FILE at a temp folder) never
+// touch the live file.
+const settings = createSettings(path.join(path.dirname(DATA_FILE), 'settings.json'));
+
+function office() {
+  const o = settings.values.office;
+  return o ? { ...o, placeholder: false } : ENV_OFFICE;
+}
+const mapId = () => ('mapId' in settings.values ? settings.values.mapId : ENV_MAP_ID);
+
+// Settings that stay in .env: the tab says whether each is set, never its value.
+const SERVER_ONLY = ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY', 'ADMIN_PASSWORD_HASH', 'HOST', 'PORT', 'TRUST_PROXY', 'DATA_FILE'];
+
+// Where each .env-type value came from, for the Settings tab. Worked out at
+// startup, like the values themselves.
+const SOURCE = Object.fromEntries([...SERVER_ONLY, 'OFFICE_LAT', 'OFFICE_LNG', 'GOOGLE_MAPS_MAP_ID'].map(k =>
+  [k, !process.env[k] ? 'not set' : FROM_ENV.has(k) ? 'environment' : '.env']));
+const sourceOf = (...keys) => keys.map(k => SOURCE[k]).find(x => x === 'environment') || keys.map(k => SOURCE[k]).find(x => x === '.env') || 'not set';
+// The office counts as set only when both numbers are valid.
+const OFFICE_SOURCE = ENV_OFFICE.placeholder
+  ? (sourceOf('OFFICE_LAT', 'OFFICE_LNG') === 'not set' ? 'not set' : 'invalid')
+  : sourceOf('OFFICE_LAT', 'OFFICE_LNG');
+
+function settingsView() {
+  const v = settings.values;
+  return {
+    office: { value: office(), overridden: 'office' in v, default: { ...ENV_OFFICE, source: OFFICE_SOURCE } },
+    mapId: { value: mapId(), overridden: 'mapId' in v, default: { value: ENV_MAP_ID, source: sourceOf('GOOGLE_MAPS_MAP_ID') } },
+    serverOnly: SERVER_ONLY.map(key => ({ key, source: sourceOf(key) })),
+    error: settings.error,
+  };
+}
+
+async function updateSettings(req, res) {
+  const changed = await settings.update(await readJson(req));
+  console.log(`settings changed: ${changed.join(', ') || 'nothing'}`);
+  return send(res, 200, settingsView());
 }
 
 // ---- restaurants -------------------------------------------------------------
@@ -309,7 +354,9 @@ async function archiveRestaurant(req, res, { id }) { // a real delete is /purge
 // [method, path pattern, handler, needs login]
 const ID = '(?<id>[A-Za-z0-9-]{1,64})';
 const ROUTES = [
-  ['GET', '/api/config', (req, res) => send(res, 200, { browserKey: BROWSER_KEY, mapId: MAP_ID, office: OFFICE, placesEnabled: !!SERVER_KEY }), false],
+  ['GET', '/api/config', (req, res) => send(res, 200, { browserKey: BROWSER_KEY, mapId: mapId(), office: office(), placesEnabled: !!SERVER_KEY }), false],
+  ['GET', '/api/settings', (req, res) => send(res, 200, settingsView()), true],
+  ['PUT', '/api/settings', updateSettings, true],
   ['GET', '/api/auth/session', (req, res) => send(res, 200, { passwordSet: !!PASSWORD_HASH, loggedIn: isLoggedIn(req) }), false],
   ['POST', '/api/auth/login', login, false],
   ['POST', '/api/auth/logout', logout, false],
@@ -332,6 +379,10 @@ async function handleApi(req, res, url) {
   if (req.method !== 'GET' && !String(req.headers['content-type'] || '').startsWith('application/json')) {
     return send(res, 415, { error: 'Send JSON' });
   }
+  // Second layer: browsers say where a request came from. Other tools (curl)
+  // don't send this header, so it's only refused when present and not ours.
+  const site = req.headers['sec-fetch-site'];
+  if (req.method !== 'GET' && site && site !== 'same-origin') return send(res, 403, { error: 'Cross-site request refused' });
   if (hit.r.needsLogin && !isLoggedIn(req)) return send(res, 401, { error: 'Log in to manage restaurants.' });
   return hit.r.handler(req, res, hit.m.groups || {});
 }
@@ -361,7 +412,8 @@ async function handle(req, res) {
   let url;
   try { url = new URL(req.url, 'http://localhost'); } catch { return send(res, 400, { error: 'Bad request' }); }
   if (url.pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
-    return send(res, store.lastError ? 503 : 200, { ok: !store.lastError, restaurants: store.items.length });
+    // A damaged settings file is reported but isn't an outage: the site still serves.
+    return send(res, store.lastError ? 503 : 200, { ok: !store.lastError, restaurants: store.items.length, ...(settings.error ? { settings: 'damaged' } : {}) });
   }
   if (url.pathname.startsWith('/api/')) {
     const started = Date.now();
@@ -386,12 +438,13 @@ function createServer() {
 
 if (require.main === module) {
   store.load();
+  settings.load();
   const server = createServer();
   // On stop/restart, finish pending saves before exiting.
   for (const sig of ['SIGTERM', 'SIGINT']) {
     process.once(sig, () => {
       server.close();
-      store.flush().finally(() => process.exit(0));
+      Promise.all([store.flush(), settings.flush()]).finally(() => process.exit(0));
       setTimeout(() => process.exit(0), 5000).unref();
     });
   }
@@ -403,8 +456,8 @@ if (require.main === module) {
     if (BROWSER_KEY && BROWSER_KEY === SERVER_KEY && TRUST_PROXY) console.warn('  ! One key is used for the map and for Places. Visitors can see it, so anyone could run Places lookups on your bill: set daily quotas, or split it into two keys (README, "Google setup").');
     if (PASSWORD_HASH.startsWith('argon2id$') && auth.algorithm !== 'argon2id') console.warn('  ! ADMIN_PASSWORD_HASH uses Argon2id, which needs Node.js 24.7+. Upgrade Node or run set-password again.');
     if (!PASSWORD_HASH) console.warn('  ! No ADMIN_PASSWORD_HASH: Manage is locked. Run: npm run set-password');
-    if (OFFICE.placeholder) console.warn('  ! OFFICE_LAT/OFFICE_LNG missing or invalid: using the ZIP 98683 default location.');
+    if (office().placeholder) console.warn('  ! No office location (OFFICE_LAT/OFFICE_LNG or Manage > Settings): using the ZIP 98683 default location.');
   });
 }
 
-module.exports = { createServer, loadStore: () => store.load(), loadDotEnv };
+module.exports = { createServer, loadStore: () => { store.load(); settings.load(); }, loadDotEnv };
