@@ -54,6 +54,7 @@ check_access() {
   local u="$1" d="$2"
   [ -n "$u" ] && [ "$u" != "$(id -un)" ] || return 0
   id "$u" > /dev/null 2>&1 || { echo "The service user $u doesn't exist. Run: $d/bin/kevins-food-map install --user NAME" >&2; exit 1; }
+  as_user "$u" true || { echo "Couldn't run a check as $u (needs sudo or runuser)." >&2; exit 1; }
   if ! as_user "$u" test -x "$d"; then
     echo "$u can't open $d (a folder above it is private). Put the app where $u can reach it, e.g. its home or /srv." >&2; exit 1
   fi
@@ -75,8 +76,10 @@ render_unit() {
   if [ "$(id -u "$user")" = 0 ]; then
     echo "Warning: the service will run as root. Safer: create a user (sudo adduser foodmap), put the app in its home, and run: bin/kevins-food-map install --user foodmap" >&2
   fi
+  # Written to a temp file and renamed, so an interruption can't leave half a unit.
   sed -e "s|@USER@|$user|g" -e "s|@DIR@|$DIR|g" -e "s|@NODE@|$node|g" \
-    "$DIR/deploy/kevins-food-map.service.in" | sudo_ tee "$UNIT" > /dev/null
+    "$DIR/deploy/kevins-food-map.service.in" | sudo_ tee "$UNIT.tmp" > /dev/null
+  sudo_ mv -f "$UNIT.tmp" "$UNIT"
   sudo_ systemctl daemon-reload
   echo "Service runs as $user from $DIR with $node."
 }
@@ -104,7 +107,12 @@ cmd_install() {
   [ -z "$before" ] || [ "$before" = "$(unit_value User)" ] || echo "The service user changed from $before to $(unit_value User)."
   sudo_ systemctl enable "$SERVICE"
   sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
-  echo "Installed. Start it with: kevins-food-map start"
+  if systemctl is-active --quiet "$SERVICE"; then
+    sudo_ systemctl restart "$SERVICE"
+    echo "Installed and restarted."
+  else
+    echo "Installed. Start it with: kevins-food-map start"
+  fi
 }
 
 # Moves the whole app folder (code, .env, restaurant list, backups) and points
@@ -197,11 +205,12 @@ move_cleanup() {
 
 cmd_uninstall() {
   need_unit
+  local where; where="$(unit_value WorkingDirectory)"
   sudo_ systemctl disable --now "$SERVICE"
   sudo_ rm -f "$UNIT"
   sudo_ systemctl daemon-reload
   [ "$(readlink -f /usr/local/bin/kevins-food-map 2>/dev/null)" = "$DIR/bin/kevins-food-map" ] && sudo_ rm -f /usr/local/bin/kevins-food-map
-  echo "Removed. Your data in $DIR/data is untouched."
+  echo "Removed. Your data in $where/data is untouched."
 }
 
 # This server's restaurant list is the live one. During an update the
@@ -240,7 +249,7 @@ on_exit() {
 }
 put_back() {
   [ -f "$DIR/$KEEP" ] || return 0
-  mkdir -p "$DIR/data"
+  as_owner mkdir -p "$DIR/data"
   as_owner mv -f "$DIR/$KEEP" "$DIR/$DATA"
 }
 
@@ -250,7 +259,7 @@ cmd_update() {
     echo "$KEEP exists: an earlier update was interrupted. It holds the live list; check it and move it over $DATA, then try again." >&2; exit 1
   fi
   # Globals, not locals: the exit trap runs after this function has returned.
-  old="" running=0 user="" upstream_changed=0 tested=0
+  old="" running=0 user="" node="" upstream_changed=0 tested=0
   old="$(git_ rev-parse HEAD)"
   # Whatever happens from here (error, Ctrl+C), go back to the old code if the
   # new code hasn't passed its tests, put the list back, and start the service
@@ -258,10 +267,15 @@ cmd_update() {
   trap 'on_exit' EXIT
   trap 'exit 130' INT TERM HUP
   if [ -f "$UNIT" ]; then
-    user="$(sed -n 's/^User=//p' "$UNIT")"
+    user="$(unit_value User)"
+    node="$(unit_value ExecStart)"; node="${node%% *}" # keep the service's Node (sudo's PATH may differ)
+    [ -x "$node" ] || node=""
     check_access "$user" "$DIR"
-    if systemctl is-active --quiet "$SERVICE"; then sudo_ systemctl stop "$SERVICE"; running=1; fi
+    # running=1 first: if Ctrl+C lands during the stop, the exit trap still starts it again.
+    if systemctl is-active --quiet "$SERVICE"; then running=1; sudo_ systemctl stop "$SERVICE"; fi
   fi
+  local path="$PATH"
+  [ -z "$node" ] || path="$(dirname "$node"):$PATH"
 
   set_aside
   git_ pull --ff-only || { echo "git pull failed; nothing changed." >&2; exit 1; }
@@ -269,16 +283,20 @@ cmd_update() {
   put_back
   [ "$upstream_changed" = 0 ] || echo "Note: $DATA changed in GitHub; this server kept its own list." >&2
 
-  if ! (cd "$DIR" && as_owner env PATH="$PATH" npm test); then
+  if ! (cd "$DIR" && as_owner env PATH="$path" npm test); then
     echo "Tests failed." >&2
     exit 1 # the exit trap rolls back
   fi
   tested=1
   if [ -f "$UNIT" ]; then
-    render_unit "$user"
-    sudo_ systemctl restart "$SERVICE"
-    running=0 # started; the exit trap needn't
-    echo "Updated to $(git_ rev-parse --short HEAD) and restarted."
+    render_unit "$user" "$node"
+    if [ "$running" = 1 ]; then
+      sudo_ systemctl start "$SERVICE"
+      running=0 # started; the exit trap needn't
+      echo "Updated to $(git_ rev-parse --short HEAD) and restarted."
+    else
+      echo "Updated to $(git_ rev-parse --short HEAD). The service was stopped; start it with: kevins-food-map start"
+    fi
   else
     echo "Updated to $(git_ rev-parse --short HEAD)."
   fi
