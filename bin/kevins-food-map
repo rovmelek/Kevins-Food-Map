@@ -66,16 +66,20 @@ check_access() {
   fi
 }
 # The service's current Node, if it's still there.
-unit_node() { local n; n="$(unit_value ExecStart)"; n="${n%% *}"; case "$n" in /*/node) [ -x "$n" ] && echo "$n" ;; esac; }
+unit_node() { local n; n="$(unit_value ExecStart)"; n="${n%% *}"; if [ -x "$n" ]; then echo "$n"; fi; }
 # Node for a new or changed unit: the service's current one, else the one on PATH.
 pick_node() {
   local n; n="$(unit_node)"
   if [ -z "$n" ]; then
+    [ -z "$(unit_value ExecStart)" ] || echo "Note: the service's Node is gone; using the one on PATH." >&2
     n="$(command -v node || true)"; [ -n "$n" ] || { echo "node not found on PATH. Install Node.js 22+ first." >&2; exit 1; }
-    n="$(readlink -f "$n")"
-    [ -z "$(unit_value ExecStart)" ] || echo "Note: the service's Node is gone; using $n." >&2
+    n="$(readlink -f "$n")"; check_node_version "$n"
   fi
   echo "$n"
+}
+check_node_version() {
+  local v; v="$("$1" -p 'process.versions.node.split(".")[0]' 2> /dev/null || echo 0)"
+  [ "$v" -ge 22 ] 2> /dev/null || { echo "$1 is Node $("$1" -v 2> /dev/null || echo '?'); the app needs Node 22+ (24.7+ recommended)." >&2; exit 1; }
 }
 # Starts or restarts the service and reports whether it stayed up.
 start_checked() {
@@ -128,13 +132,14 @@ cmd_install() {
   local node prev; prev="$(unit_node)"
   node="$(command -v node || true)"; [ -n "$node" ] || { echo "node not found on PATH. Install Node.js 22+ first." >&2; exit 1; }
   node="$(readlink -f "$node")"
+  check_node_version "$node"
   check_access "$user" "$DIR" "$node"
   render_unit "$user" "$node"
   [ -z "$prev" ] || [ "$prev" = "$node" ] || echo "Node changed from $prev to $node ($("$node" -v))."
   [ -z "$before" ] || [ "$before" = "$(unit_value User)" ] || echo "The service user changed from $before to $(unit_value User)."
   sudo_ systemctl enable "$SERVICE"
   sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
-  if systemctl is-active --quiet "$SERVICE"; then
+  if case "$(systemctl is-active "$SERVICE" || true)" in active|activating|reloading) true ;; *) false ;; esac; then
     start_checked restart || exit 1
     echo "Installed and restarted."
   else
