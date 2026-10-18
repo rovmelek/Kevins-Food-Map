@@ -199,3 +199,54 @@ test('.env loader handles export, quotes with comments, and keeps real env vars'
     assert.strictEqual(process.env.PATH, before);
   } finally { for (const k of ['NASC_T1', 'NASC_T2', 'NASC_T3', 'NASC_T4']) delete process.env[k]; }
 });
+
+test('a login whose body arrives after the lockout is still refused', async () => {
+  const { srv, port } = await startServer({ ADMIN_PASSWORD_HASH: await auth.hashPassword('right password 1') });
+  const body = JSON.stringify({ password: 'wrong' });
+  // Open 8 requests while not locked out, but hold back their bodies.
+  const sockets = await Promise.all(Array.from({ length: 8 }, () => new Promise(resolve => {
+    const s = net.connect(port, '127.0.0.1', () => {
+      s.write(`POST /api/auth/login HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n`);
+      resolve(s);
+    });
+  })));
+  try {
+    await new Promise(r => setTimeout(r, 100));
+    const statuses = [];
+    for (const s of sockets) {
+      const reply = new Promise(r => { let o = ''; s.on('data', d => { o += d; }); s.on('close', () => r(o)); });
+      s.write(body); // the server closes the connection after answering
+      statuses.push((await reply).slice(9, 12));
+    }
+    assert.ok(statuses.filter(x => x === '401').length <= 5, `checked at most 5: ${statuses}`);
+    assert.ok(statuses.includes('429'), String(statuses));
+  } finally { sockets.forEach(s => s.destroy()); srv.close(); auth.clearFailures('127.0.0.1'); }
+});
+
+test('a failed bulk archive undoes only its own change', async () => {
+  const { srv, base, dataFile } = await startServer({ ADMIN_PASSWORD_HASH: await auth.hashPassword('right password 1') });
+  const headers = { 'Content-Type': 'application/json' };
+  const add = name => fetch(base + '/api/restaurants', { method: 'POST', headers, body: JSON.stringify({ url: `https://www.google.com/maps/place/${name}/@${name.length},1,17z` }) }).then(r => r.json());
+  const list = async () => (await (await fetch(base + '/api/restaurants')).json()).map(r => r.name).sort();
+  const origWrite = fs.promises.writeFile, origError = console.error;
+  console.error = () => {};
+  try {
+    const login = await fetch(base + '/api/auth/login', { method: 'POST', headers, body: JSON.stringify({ password: 'right password 1' }) });
+    headers.Cookie = login.headers.get('set-cookie').split(';')[0];
+    const a = (await add('Alpha')).results[0].restaurant;
+    await add('Bravo');
+    // The next write is slow and fails; writes after it succeed.
+    let failNext = true;
+    fs.promises.writeFile = async (...args) => {
+      if (String(args[0]).startsWith(dataFile) && failNext) { failNext = false; await new Promise(r => setTimeout(r, 150)); throw new Error('disk full'); }
+      return origWrite.apply(fs.promises, args);
+    };
+    const archive = fetch(base + '/api/restaurants/archive', { method: 'POST', headers, body: JSON.stringify({ ids: [a.id] }) });
+    await new Promise(r => setTimeout(r, 30));
+    const charlie = add('Charlie');
+    assert.strictEqual((await archive).status, 500);
+    assert.strictEqual((await charlie).results[0].status, 'added');
+    assert.deepStrictEqual(await list(), ['Alpha', 'Bravo', 'Charlie'], 'Alpha back, Charlie kept');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(dataFile, 'utf8')).map(r => r.name).sort(), ['Alpha', 'Bravo', 'Charlie']);
+  } finally { fs.promises.writeFile = origWrite; console.error = origError; srv.close(); }
+});

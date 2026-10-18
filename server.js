@@ -190,6 +190,10 @@ async function login(req, res) {
   if (wait) return send(res, 429, { error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60000)} min.` }, undefined, { 'Retry-After': String(Math.ceil(wait / 1000)) });
   const { password } = await readJson(req);
   if (typeof password !== 'string' || !password) throw badRequest('Enter the password.');
+  // Check again now the body is in: a client could open many requests
+  // before the lockout and send their bodies later.
+  const waitNow = auth.lockedFor(ip);
+  if (waitNow) return send(res, 429, { error: `Too many wrong passwords. Try again in ${Math.ceil(waitNow / 60000)} min.` }, undefined, { 'Retry-After': String(Math.ceil(waitNow / 1000)) });
   if (loginsRunning >= MAX_CONCURRENT_LOGINS) return send(res, 429, { error: 'Busy, try again in a moment.' }, undefined, { 'Retry-After': '2' });
   // Count the attempt before the slow check, so parallel guesses can't all
   // slip in before the lockout; a correct password clears it.
@@ -228,23 +232,30 @@ async function addRestaurants(req, res) {
 // Purge only removes restaurants that are already archived.
 async function bulkChange(req, res, { action }) {
   const ids = readIds(await readJson(req));
-  const before = store.items;
-  let changed = 0;
+  // Remember exactly what this request changed, so a failed save undoes only
+  // that, not changes other requests made meanwhile.
+  const undo = new Map(); // new object -> old object
+  let removed = [];
   if (action === 'purge') {
-    store.items = before.filter(r => !(ids.has(r.id) && r.archivedAt));
-    changed = before.length - store.items.length;
+    removed = store.items.filter(r => ids.has(r.id) && r.archivedAt);
+    store.items = store.items.filter(r => !removed.includes(r));
   } else {
     const now = new Date().toISOString();
-    store.items = before.map(r => {
+    store.items = store.items.map(r => {
       if (!ids.has(r.id) || !!r.archivedAt === (action === 'archive')) return r;
-      changed++;
-      if (action === 'archive') return { ...r, archivedAt: now };
-      const { archivedAt, ...rest } = r;
-      return rest;
+      let next;
+      if (action === 'archive') next = { ...r, archivedAt: now };
+      else { const { archivedAt, ...rest } = r; next = rest; }
+      undo.set(next, r);
+      return next;
     });
   }
+  const changed = removed.length + undo.size;
   if (changed) {
-    try { await store.save(); } catch (e) { store.items = before; throw e; }
+    try { await store.save(); } catch (e) {
+      store.items = [...store.items.map(x => undo.get(x) ?? x), ...removed];
+      throw e;
+    }
   }
   return send(res, 200, { changed });
 }
@@ -343,7 +354,7 @@ function serveStatic(req, res, url) {
 async function handle(req, res) {
   let url;
   try { url = new URL(req.url, 'http://localhost'); } catch { return send(res, 400, { error: 'Bad request' }); }
-  if (url.pathname === '/healthz' && req.method === 'GET') {
+  if (url.pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
     return send(res, store.lastError ? 503 : 200, { ok: !store.lastError, restaurants: store.items.length });
   }
   if (url.pathname.startsWith('/api/')) {

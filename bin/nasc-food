@@ -25,16 +25,18 @@ need_unit() {
 # systemd unit files can't hold these characters safely in paths.
 check_path() {
   case "$1" in
-    *[[:space:]\&\|\\%]*) echo "Can't install from '$1': move the app to a path without spaces or & | \\ % characters." >&2; exit 1 ;;
+    *[[:space:]\&\|\\%\$\"\'\;]*) echo "Can't install from '$1': use a path without spaces or special characters." >&2; exit 1 ;;
   esac
 }
 
+# Writes the systemd unit. On install the service user is whoever ran the
+# command (the sudo user, if any); on update it stays whatever it was.
 render_unit() {
-  local node user
+  local node user="${1:-}"
   node="$(command -v node || true)"
   [ -n "$node" ] || { echo "node not found on PATH. Install Node.js 22+ first." >&2; exit 1; }
   node="$(readlink -f "$node")"
-  user="${SUDO_USER:-$(id -un)}"
+  [ -n "$user" ] || user="${SUDO_USER:-$(id -un)}"
   check_path "$DIR"; check_path "$node"
   if [ "$user" = root ]; then
     echo "Warning: the service will run as root. Safer: create a user (sudo adduser nascfood), put the app in its home, and run install as that user with sudo." >&2
@@ -65,35 +67,63 @@ cmd_uninstall() {
   echo "Removed. Your data in $DIR/data is untouched."
 }
 
-# This server's restaurant list is the live one: it is set aside before
-# pulling and put back afterwards, so a pull never fails on it or replaces it.
-# (Changes to the list in GitHub are not applied; daily backups are in
-# data/backups/.) If the tests fail, the code goes back to what it was.
+# This server's restaurant list is the live one. During an update the
+# service is stopped (so nothing is saved meanwhile), the list is set aside
+# next to itself as restaurants.json.keep, the code is pulled, and the list is
+# put back. It is put back even if the update fails or is interrupted, and the
+# service is started again either way. (Changes to the list in GitHub are not
+# applied; daily backups are in data/backups/.) If the tests fail, the code
+# goes back to what it was.
+KEEP="$DATA.keep"
+
+set_aside() {
+  mv -f "$DIR/$DATA" "$DIR/$KEEP"
+  # Make the working copy match git so the pull or reset can't trip over it.
+  if git -C "$DIR" ls-files --error-unmatch "$DATA" > /dev/null 2>&1; then git -C "$DIR" checkout -- "$DATA"; fi
+}
+put_back() {
+  [ -f "$DIR/$KEEP" ] || return 0
+  mkdir -p "$DIR/data"
+  mv -f "$DIR/$KEEP" "$DIR/$DATA"
+}
+
 cmd_update() {
-  local old live
-  old="$(git -C "$DIR" rev-parse HEAD)"
-  live="$(mktemp)"
-  cp "$DIR/$DATA" "$live"
-  git -C "$DIR" checkout -- "$DATA"
-  local upstream_changed=0
-  if ! git -C "$DIR" pull --ff-only; then
-    cp "$live" "$DIR/$DATA"; rm -f "$live"
-    echo "git pull failed; nothing changed." >&2; exit 1
+  [ -f "$DIR/$DATA" ] || { echo "$DATA is missing. Restore it from data/backups/ (or: git -C $DIR checkout -- $DATA) and try again." >&2; exit 1; }
+  if [ -f "$DIR/$KEEP" ]; then
+    echo "$KEEP exists: an earlier update was interrupted. It holds the live list; check it and move it over $DATA, then try again." >&2; exit 1
   fi
+  # Globals, not locals: the exit trap runs after this function has returned.
+  old="" running=0 user="" upstream_changed=0
+  old="$(git -C "$DIR" rev-parse HEAD)"
+  if [ -f "$UNIT" ]; then
+    user="$(sed -n 's/^User=//p' "$UNIT")"
+    if systemctl is-active --quiet "$SERVICE"; then running=1; sudo_ systemctl stop "$SERVICE"; fi
+  fi
+  # Whatever happens from here (error, Ctrl+C), put the list back and start
+  # the service again if it was running.
+  trap 'put_back; if [ "$running" = 1 ]; then sudo_ systemctl start "$SERVICE" || true; fi' EXIT
+  trap 'exit 130' INT TERM
+
+  set_aside
+  git -C "$DIR" pull --ff-only || { echo "git pull failed; nothing changed." >&2; exit 1; }
   git -C "$DIR" diff --quiet "$old" HEAD -- "$DATA" || upstream_changed=1
-  cp "$live" "$DIR/$DATA"; rm -f "$live"
+  put_back
   [ "$upstream_changed" = 0 ] || echo "Note: $DATA changed in GitHub; this server kept its own list." >&2
+
   if ! (cd "$DIR" && npm test); then
-    live="$(mktemp)"; cp "$DIR/$DATA" "$live"; git -C "$DIR" checkout -- "$DATA"
+    set_aside
     git -C "$DIR" reset --keep "$old"
-    cp "$live" "$DIR/$DATA"; rm -f "$live"
-    echo "Tests failed, so the code was rolled back to $(git -C "$DIR" rev-parse --short HEAD). The service was not restarted." >&2
+    put_back
+    echo "Tests failed, so the code was rolled back to $(git -C "$DIR" rev-parse --short HEAD)." >&2
     exit 1
   fi
   if [ -f "$UNIT" ]; then
-    render_unit
+    render_unit "$user"
     sudo_ systemctl restart "$SERVICE"
+    running=0 # started; the exit trap needn't
     echo "Updated to $(git -C "$DIR" rev-parse --short HEAD) and restarted."
+  else
+    echo "Updated to $(git -C "$DIR" rev-parse --short HEAD)."
   fi
 }
 

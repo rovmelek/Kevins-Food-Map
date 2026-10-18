@@ -215,6 +215,7 @@ async function initMap() {
     ...(state.config.mapId ? { mapId: state.config.mapId } : { styles: QUIET_STYLE }),
     clickableIcons: false, mapTypeControl: false, streetViewControl: false,
   });
+  $('mapNotice').hidden = true; // a slow load may have shown the timeout notice
   if (!state.config.mapId) {
     let detailed = false;
     map.instance.addListener('zoom_changed', () => {
@@ -315,7 +316,7 @@ function select(id, { fromMap = false, toggle = true } = {}) {
   map.instance.panTo(latLng(r));
   map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
   map.info.setPosition(latLng(r));
-  map.info.open({ map: map.instance });
+  map.info.open({ map: map.instance, shouldFocus: false });
 }
 
 // ---- location --------------------------------------------------------------
@@ -455,7 +456,7 @@ async function submitAdd(e) {
   e.preventDefault();
   const input = currentAddInput();
   const out = $('addResults');
-  if (!input.value.trim() || state.busy) return;
+  if (!input.value.trim()) return;
   $('addSubmit').disabled = true;
   out.innerHTML = '<li>Looking up places…</li>';
   try {
@@ -476,7 +477,7 @@ async function submitAdd(e) {
     input.focus();
     if (changed) fitToVisible();
   } catch (err) {
-    if (!err.handled) out.innerHTML = `<li class="error">✕ ${esc(err.message)}</li>`;
+    out.innerHTML = err.handled ? '' : `<li class="error">✕ ${esc(err.message)}</li>`;
   } finally {
     $('addSubmit').disabled = false;
   }
@@ -529,13 +530,14 @@ function renderEditList() {
         <p class="name">${esc(r.name)}</p>
         <p class="meta">${inArchive ? `Archived ${esc(new Date(r.archivedAt).toLocaleDateString())}` : r.address ? esc(r.address) : 'Address not available'}</p>
       </div>
-      <div class="edit-actions">${inArchive ? '' : `
-        <button type="button" class="tag" data-act="cuisine" aria-label="Food type: ${esc(r.cuisine)}. Change" ${busy ? 'disabled' : ''}>${esc(r.cuisine)} ✎</button>
-        ${!r.enriched && state.config.placesEnabled ? `<button type="button" class="tag" data-act="refresh" title="Look up phone and address again" ${busy ? 'disabled' : ''}>↻ Details</button>` : ''}`}
-      </div>
+      <div class="edit-actions">${inArchive ? '' : editActions(r, busy)}</div>
     </li>`).join('') : `<li class="empty">${empty}</li>`;
   });
 }
+
+const editActions = (r, busy) => `
+        <button type="button" class="tag" data-act="cuisine" aria-label="Food type: ${esc(r.cuisine)}. Change" ${busy ? 'disabled' : ''}>${esc(r.cuisine)} ✎</button>
+        ${!r.enriched && state.config.placesEnabled ? `<button type="button" class="tag" data-act="refresh" title="Look up phone and address again" ${busy ? 'disabled' : ''}>↻ Details</button>` : ''}`;
 
 // Runs one Manage action at a time; everything else is disabled meanwhile.
 // Afterwards focus goes back to the control you used, or the nearest one
@@ -558,23 +560,35 @@ async function exclusive(fn) {
 }
 
 // The food type is edited in place, with suggestions from the existing ones.
+// The new value shows at once and the save runs in the background, so the
+// rest of the window stays usable (a click that ended the edit still lands).
 function editCuisine(row, r) {
   const actions = row.querySelector('.edit-actions');
-  actions.innerHTML = `<input class="cuisine-input" list="cuisineOptions" maxlength="40" value="${esc(r.cuisine)}" aria-label="Food type for ${esc(r.name)}">`;
+  actions.innerHTML = `<input class="cuisine-input" data-act="cuisine" list="cuisineOptions" maxlength="40" value="${esc(r.cuisine)}" aria-label="Food type for ${esc(r.name)}">`;
   const input = actions.querySelector('input');
   input.select();
   let done = false;
   const finish = save => {
     if (done) return;
     done = true;
-    const next = input.value.trim();
-    const refocus = () => $('editList').querySelector(`[data-id="${CSS.escape(r.id)}"] [data-act="cuisine"]`)?.focus();
-    if (!save || !next || next === r.cuisine) { renderEditList(); refocus(); return; }
-    exclusive(async () => {
-      Object.assign(r, await api(restaurantUrl(r.id), { method: 'PATCH', body: JSON.stringify({ cuisine: next }) }));
+    const old = r.cuisine, next = input.value.trim();
+    if (save && next && next !== old) r.cuisine = next;
+    // Only this row changes, so whatever was clicked to end the edit stays put.
+    const hadFocus = document.activeElement === input;
+    actions.innerHTML = editActions(r, state.busy);
+    if (hadFocus) actions.querySelector('[data-act="cuisine"]')?.focus();
+    if (r.cuisine === old) return;
+    api(restaurantUrl(r.id), { method: 'PATCH', body: JSON.stringify({ cuisine: next }) }).then(updated => {
+      // The list may have been reloaded meanwhile; update whichever copy is shown.
+      Object.assign(state.restaurants.find(x => x.id === r.id) || r, updated);
+      Object.assign(r, updated);
       renderAll();
       setStatus(`Changed ${r.name} to ${r.cuisine}.`);
-    }).then(refocus);
+    }, err => {
+      r.cuisine = old;
+      renderAll();
+      showError(err);
+    });
   };
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); finish(true); }
@@ -609,8 +623,14 @@ function onEditClick(e) {
 async function onEditTool(tool) {
   if (state.busy) return;
   setStatus('');
-  if (tool === 'all') { editItems().forEach(r => state.checked.add(r.id)); return renderEditList(); }
-  if (tool === 'none') { state.checked.clear(); return renderEditList(); }
+  if (tool === 'all' || tool === 'none') {
+    if (tool === 'all') editItems().forEach(r => state.checked.add(r.id)); else state.checked.clear();
+    renderEditList();
+    // The button just used is now disabled; keep focus nearby instead of losing it.
+    const a = document.activeElement;
+    if (!a || a === document.body || a.disabled) document.querySelector(`#editPane [data-tool="${tool === 'all' ? 'none' : 'all'}"]`).focus();
+    return;
+  }
   const ids = [...state.checked];
   if (!ids.length) return;
   if (tool === 'refresh') {
@@ -656,9 +676,10 @@ async function init() {
   $('manageClose').onclick = $('manageDone').onclick = () => dlg.close();
   // Clicking the dimmed backdrop closes the window; a drag that merely ends
   // there (e.g. selecting text in a field) doesn't.
-  let downOnBackdrop = false;
+  let downOnBackdrop = false, upOnBackdrop = false;
   dlg.addEventListener('mousedown', e => { downOnBackdrop = e.target === dlg; });
-  dlg.addEventListener('click', e => { if (e.target === dlg && downOnBackdrop) dlg.close(); downOnBackdrop = false; });
+  dlg.addEventListener('mouseup', e => { upOnBackdrop = e.target === dlg; });
+  dlg.addEventListener('click', e => { if (e.target === dlg && downOnBackdrop && upOnBackdrop) dlg.close(); downOnBackdrop = upOnBackdrop = false; });
   $('logoutBtn').onclick = () => logout().catch(err => toast(err.message));
   $('loginView').onsubmit = submitLogin;
   document.querySelectorAll('#manageView [role=tab]').forEach(t => {

@@ -61,9 +61,13 @@ async function main() {
   }
   // Write a private temp file and rename it over .env, so the file is never
   // half-written and ends up readable only by its owner even if it was not.
+  // It keeps the existing file's owner, so running this with sudo doesn't
+  // leave .env unreadable for the service's user.
+  const owner = fs.existsSync(ENV) ? fs.statSync(ENV) : null;
   const tmp = `${ENV}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, env, { mode: 0o600 });
   fs.chmodSync(tmp, 0o600);
+  if (owner && process.getuid && (owner.uid !== process.getuid())) fs.chownSync(tmp, owner.uid, owner.gid);
   fs.renameSync(tmp, ENV);
   console.log(`Saved to ${ENV}. Restart the server (nasc-food restart, or npm start) to use it.`);
 }

@@ -6,6 +6,7 @@
 # Written by the server: temp files and daily backups (the list itself,
 # data/restaurants.json, is tracked on purpose)
 data/*.tmp
+data/*.keep
 data/backups/
 
 node_modules/

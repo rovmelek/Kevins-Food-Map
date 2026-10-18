@@ -56,7 +56,9 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .name { font-weight: 600; margin: 0 0 2px; }
 /* The card's name is its button: keyboard users Tab to it and press Enter/Space. */
 .card-main { display: block; border: 0; background: none; padding: 0; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
-.card-main:focus-visible, .pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.card-main:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* Pins sit on the map in either theme, so their ring is fixed: dark with a white gap. */
+.pin:focus-visible { outline: 3px solid #1d2330; outline-offset: 2px; box-shadow: 0 0 0 2px #fff; border-radius: 4px; }
 .meta { color: var(--muted); font-size: 12px; margin: 1px 0; }
 .meta a { color: inherit; }
 .side { text-align: right; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
