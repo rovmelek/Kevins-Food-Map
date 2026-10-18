@@ -403,7 +403,11 @@ function serveStatic(req, res, url) {
       const nonce = crypto.randomBytes(16).toString('base64');
       return send(res, 200, buf.toString('utf8').replaceAll('__CSP_NONCE__', nonce), MIME['.html'], { 'Content-Security-Policy': pageCsp(nonce) });
     }
-    send(res, 200, buf, MIME[path.extname(file)] || 'application/octet-stream');
+    // Images (the site icons) may be cached for a day; code and styles are
+    // not, so an update shows up on the next page load.
+    const ext = path.extname(file);
+    const cache = ext === '.svg' || ext === '.png' || ext === '.ico' ? { 'Cache-Control': 'public, max-age=86400' } : {};
+    send(res, 200, buf, MIME[ext] || 'application/octet-stream', cache);
   });
 }
 

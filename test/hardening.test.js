@@ -85,6 +85,27 @@ test('the page sends a nonce-based CSP that matches its script tag', async () =>
   } finally { srv.close(); }
 });
 
+test('every icon the page links to is served with an image type', async () => {
+  const { srv, base } = await startServer();
+  try {
+    const html = await (await fetch(base + '/')).text();
+    const icons = [...html.matchAll(/<link\b[^>]*>/g)].map(m => m[0])
+      .filter(tag => /\brel="[^"]*\b(icon|apple-touch-icon)\b/.test(tag))
+      .map(tag => tag.match(/\bhref="([^"]+)"/)[1]);
+    assert.deepStrictEqual(icons.sort(), ['apple-touch-icon.png', 'favicon-32.png', 'favicon.svg']);
+    for (const href of icons) {
+      const res = await fetch(`${base}/${href}`);
+      assert.strictEqual(res.status, 200, href);
+      assert.match(res.headers.get('content-type'), /^image\/(svg\+xml|png)$/, href);
+      assert.match(res.headers.get('cache-control'), /max-age=86400/, href);
+      const body = Buffer.from(await res.arrayBuffer());
+      if (href.endsWith('.png')) assert.strictEqual(body.subarray(1, 4).toString(), 'PNG', href);
+      else assert.ok(body.toString().includes('<svg'), href);
+    }
+    assert.strictEqual((await fetch(base + '/app.js')).headers.get('cache-control'), 'no-store', 'code is never cached');
+  } finally { srv.close(); }
+});
+
 test('parallel wrong passwords are capped by the lockout, and the last X-Forwarded-For entry counts', async () => {
   const { srv, base } = await startServer({ ADMIN_PASSWORD_HASH: await auth.hashPassword('right password 1'), TRUST_PROXY: '1' });
   const login = (pw, xff) => fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': xff }, body: JSON.stringify({ password: pw }) }).then(r => r.status);

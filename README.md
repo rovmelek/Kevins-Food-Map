@@ -620,7 +620,7 @@ Browser (public/)                      Server (server.js, lib/)                 
 - **`lib/store.js`**: the restaurant list. Writes are queued and atomic (temporary file, flush, rename), with daily backups.
 - **`lib/settings.js`**: the values changed in Manage → Settings, checked on load and on save.
 - **`lib/auth.js`**: password hashing (Argon2id or scrypt), login sessions and the lockout.
-- **`public/`**: the whole front end, with no build step and no framework.
+- **`public/`**: the whole front end, with no build step and no framework. The site icon is `favicon.svg`, with PNG copies for browsers and phones that don't use SVG icons (`favicon-32.png`, `apple-touch-icon.png`); the server lets browsers cache these for a day.
 - **`bin/kevins-food-map`** and **`deploy/kevins-food-map.service.in`**: the service script and the hardened systemd unit it installs.
 - **`scripts/set-password.js`**: writes the password hash to `.env`.
 

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Kevin's Food Map</title>
+  <!-- A map pin like the ones on the map, with a fork and a knife -->
+  <path d="M32 2C17.6 2 7 12.8 7 26.4 7 44 32 62 32 62s25-18 25-35.6C57 12.8 46.4 2 32 2z" fill="#e8590c" stroke="#fff" stroke-width="2.5"/>
+  <path d="M19.5 11v10M24.5 11v10M29.5 11v10M19.5 21c0 4 10 4 10 0M24.5 24v16M41.5 28v12" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.8"/>
+  <path d="M43.4 10C38 12 35.6 18.5 36 30h7.4z" fill="#fff"/>
+</svg>
