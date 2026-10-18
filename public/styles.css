@@ -49,6 +49,7 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .chip:hover { border-color: var(--accent); }
 .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .chip .n { opacity: .75; margin-left: 2px; }
+.chip[aria-pressed="true"] .n { opacity: 1; }
 .chip:focus-visible, .filter-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .active-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 16px 0; }
 .active-filters .chip { font-size: 12px; padding: 2px 8px; }

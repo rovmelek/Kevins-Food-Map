@@ -109,8 +109,10 @@ function renderFilterOptions() {
   for (const r of state.restaurants) counts.set(r.cuisine, (counts.get(r.cuisine) || 0) + 1);
   const names = [...counts.keys()].sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b));
   for (const c of state.cuisines) if (!counts.has(c)) state.cuisines.delete(c);
-  const chip = n => `<button type="button" class="chip" data-cuisine="${esc(n)}" aria-pressed="${state.cuisines.has(n)}">${iconFor(n)} ${esc(n)}<span class="n">${counts.get(n)}</span></button>`;
-  keepChipFocus($('filterChips'), () => { $('filterChips').innerHTML = names.map(chip).join(''); });
+  const chip = n => `<button type="button" class="chip" data-cuisine="${esc(n)}" aria-pressed="${state.cuisines.has(n)}"><span aria-hidden="true">${iconFor(n)}</span> ${esc(n)}<span class="n" aria-hidden="true">${counts.get(n)}</span><span class="visually-hidden">, ${plural(counts.get(n), 'restaurant')}</span></button>`;
+  keepChipFocus($('filterChips'), () => {
+    $('filterChips').innerHTML = names.length ? names.map(chip).join('') : '<p class="hint">No restaurants yet.</p>';
+  });
   renderActiveFilters();
   // Suggestions when changing a food type in Manage, so typos don't create
   // a new category.
@@ -130,9 +132,8 @@ function renderActiveFilters() {
   const box = $('activeFilters');
   box.hidden = !n;
   keepChipFocus(box, () => {
-    box.innerHTML = [...state.cuisines].sort().map(c => `<button type="button" class="chip" data-cuisine="${esc(c)}" aria-label="Remove filter ${esc(c)}">${iconFor(c)} ${esc(c)} ✕</button>`).join('');
+    box.innerHTML = [...state.cuisines].sort().map(c => `<button type="button" class="chip" data-cuisine="${esc(c)}" aria-label="Remove filter ${esc(c)}"><span aria-hidden="true">${iconFor(c)}</span> ${esc(c)} ✕</button>`).join('');
   });
-  if (!n && box.contains(document.activeElement)) $('filterBtn').focus();
 }
 
 function keepChipFocus(root, render) {
@@ -784,14 +785,15 @@ async function init() {
     if (c != null) setFilter(() => (state.cuisines.has(c) ? state.cuisines.delete(c) : state.cuisines.add(c)));
   };
   $('activeFilters').onclick = e => {
-    const c = e.target.closest('[data-cuisine]')?.dataset.cuisine;
-    if (c != null) setFilter(() => state.cuisines.delete(c));
+    const b = e.target.closest('[data-cuisine]');
+    if (!b) return;
+    // Focus moves to the next filter (or the previous one, or the Filter button).
+    const next = (b.nextElementSibling || b.previousElementSibling)?.dataset.cuisine;
+    setFilter(() => state.cuisines.delete(b.dataset.cuisine));
+    ([...$('activeFilters').children].find(x => x.dataset.cuisine === next) || $('filterBtn')).focus();
   };
   $('filterClear').onclick = () => { setFilter(() => state.cuisines.clear()); $('filterChips').querySelector('.chip')?.focus(); };
   // Escape or a click elsewhere closes the panel.
-  $('filterPanel').addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.stopPropagation(); toggleFilterPanel(false); $('filterBtn').focus(); }
-  });
   document.addEventListener('pointerdown', e => {
     if (!$('filterPanel').hidden && !e.target.closest('#filterPanel, #filterBtn')) toggleFilterPanel(false);
   });
@@ -799,7 +801,11 @@ async function init() {
     if (!$('filterPanel').hidden && !e.target.closest('#filterPanel, #filterBtn')) toggleFilterPanel(false);
   });
   $('list').onclick = onListClick;
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !dlg.open) deselect(); });
+  // Escape closes the filter panel if it's open, else clears the selection.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || dlg.open) return;
+    if (!$('filterPanel').hidden) { toggleFilterPanel(false); $('filterBtn').focus(); } else deselect();
+  });
 
   [state.config, state.restaurants] = await Promise.all([api('/api/config'), api('/api/restaurants')]);
   useOffice();
