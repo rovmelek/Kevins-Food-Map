@@ -94,7 +94,8 @@ roll_back() {
 on_exit() {
   trap '' INT TERM HUP # finish cleaning up even if Ctrl+C is pressed again
   set +e
-  if [ "$pulled" = 1 ] && [ "$tested" = 0 ]; then roll_back; fi
+  # (Checked by commit, not by a flag: Ctrl+C can land after git moved HEAD.)
+  if [ "$tested" = 0 ] && [ "$(git -C "$DIR" rev-parse HEAD)" != "$old" ]; then roll_back; fi
   put_back
   if [ "$running" = 1 ] && ! sudo_ systemctl start "$SERVICE"; then
     echo "The service is stopped and couldn't be started. Run: nasc-food start" >&2
@@ -112,7 +113,7 @@ cmd_update() {
     echo "$KEEP exists: an earlier update was interrupted. It holds the live list; check it and move it over $DATA, then try again." >&2; exit 1
   fi
   # Globals, not locals: the exit trap runs after this function has returned.
-  old="" running=0 user="" upstream_changed=0 pulled=0 tested=0
+  old="" running=0 user="" upstream_changed=0 tested=0
   old="$(git -C "$DIR" rev-parse HEAD)"
   # Whatever happens from here (error, Ctrl+C), go back to the old code if the
   # new code hasn't passed its tests, put the list back, and start the service
@@ -126,7 +127,6 @@ cmd_update() {
 
   set_aside
   git -C "$DIR" pull --ff-only || { echo "git pull failed; nothing changed." >&2; exit 1; }
-  pulled=1
   git -C "$DIR" diff --quiet "$old" HEAD -- "$DATA" || upstream_changed=1
   put_back
   [ "$upstream_changed" = 0 ] || echo "Note: $DATA changed in GitHub; this server kept its own list." >&2

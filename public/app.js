@@ -52,11 +52,14 @@ function ratingHtml(r) {
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && state.loggedIn) {
-    state.loggedIn = false;
-    renderManage();
-    $('loginError').textContent = 'Your login expired. Log in again.';
-    if ($('manageDialog').open) $('password').focus();
+  if (res.status === 401) {
+    // Requests already in flight can come back 401 too; only the first one switches.
+    if (state.loggedIn) {
+      state.loggedIn = false;
+      renderManage();
+      $('loginError').textContent = 'Your login expired. Log in again.';
+      if ($('manageDialog').open) $('password').focus();
+    }
     throw Object.assign(new Error(data.error || 'Logged out'), { handled: true });
   }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -566,6 +569,12 @@ async function exclusive(fn) {
   }
 }
 
+// Whether a mouse button or finger is down (a blur then comes from a click).
+let pointerDown = false;
+addEventListener('pointerdown', () => { pointerDown = true; }, true);
+addEventListener('pointerup', () => { pointerDown = false; }, true);
+addEventListener('pointercancel', () => { pointerDown = false; }, true);
+
 // Only the parts that show the food type are redrawn, so an editor open on
 // another row (and the click that opened it) isn't disturbed.
 function cuisineChanged(r) {
@@ -599,18 +608,26 @@ function editCuisine(row, r) {
     if (done) return;
     done = true;
     const old = r.cuisine, next = input.value.trim();
-    if (save && next && next !== old) r.cuisine = next;
+    // (Not saved if the login expired meanwhile: the value may be half-typed.)
+    if (save && state.loggedIn && next && next !== old) r.cuisine = next;
     // Only this row changes, so whatever was clicked to end the edit stays put.
     const hadFocus = document.activeElement === input;
     actions.innerHTML = editActions(r, state.busy);
     if (hadFocus) actions.querySelector('[data-act="cuisine"]')?.focus();
-    if (state.editListStale) renderEditList(); // something changed while editing
-    else patchEditRow(r);
+    patchEditRow(r);
+    // Something changed while editing. If a click ended the edit, redraw after
+    // it lands, not under the mouse.
+    if (state.editListStale) {
+      if (pointerDown) addEventListener('pointerup', () => setTimeout(renderEditList), { once: true });
+      else renderEditList();
+    }
     if (r.cuisine === old) return;
     api(restaurantUrl(r.id), { method: 'PATCH', body: JSON.stringify({ cuisine: next }) }).then(updated => {
+      if (r.cuisine !== next) return; // a later edit of this row has taken over
       // The list may have been reloaded meanwhile; update whichever copy is shown.
-      Object.assign(state.restaurants.find(x => x.id === r.id) || r, updated);
-      Object.assign(r, updated);
+      const change = { cuisine: updated.cuisine, cuisineManual: updated.cuisineManual };
+      Object.assign(state.restaurants.find(x => x.id === r.id) || r, change);
+      Object.assign(r, change);
       cuisineChanged(r);
       if (!state.busy) setStatus(`Changed ${r.name} to ${r.cuisine}.`); // don't hide another action's result
     }, err => {

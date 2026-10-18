@@ -51,7 +51,7 @@ Behind a proxy like this (keep the default `HOST=127.0.0.1` so nobody can reach 
 
 Install as a normal user with sudo, not as root, so the service doesn't run as root. Install from a path without spaces.
 
-**Updates and the restaurant list.** The list on the server is the live one. `nasc-food update` sets it aside, pulls the new code, and puts it back, so an update never fails on it or replaces it. Changes to `data/restaurants.json` made in GitHub are not applied on the server; the update says so when that happens. To move the list to a new server, copy that file.
+**Updates and the restaurant list.** The list on the server is the live one. `nasc-food update` sets it aside, pulls the new code, and puts it back, so an update never fails on it or replaces it. Changes to `data/restaurants.json` made in GitHub are not applied on the server; the update says so when that happens. To move the list to a new server, copy that file. Over SSH, run the update inside `tmux` or `screen`, so a dropped connection can't interrupt it halfway (it would roll back, but the service may stay stopped if `sudo` needs a password).
 
 **Backups.** Before the first change of each day, the server copies the list to `data/backups/restaurants-YYYY-MM-DD.json` and keeps the last 14. To undo a mistake, stop the server, copy a backup over `data/restaurants.json`, and start it again.
 
