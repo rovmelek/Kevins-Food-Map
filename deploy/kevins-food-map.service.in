@@ -1,7 +1,7 @@
-# Template for the NASC Food systemd service. `bin/nasc-food install` fills
-# in the @...@ values and installs it as /etc/systemd/system/nasc-food.service.
+# Template for the Kevin's Food Map systemd service. `bin/kevins-food-map install` fills
+# in the @...@ values and installs it as /etc/systemd/system/kevins-food-map.service.
 [Unit]
-Description=NASC Food restaurant map
+Description=Kevin's Food Map restaurant map
 After=network-online.target
 Wants=network-online.target
 # Give up if it crashes 5 times within a minute (e.g. a bad .env), so a

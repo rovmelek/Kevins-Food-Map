@@ -1,5 +1,5 @@
 'use strict';
-// NASC Food: a tiny zero-dependency server. Serves the page, resolves Google
+// Kevin's Food Map: a tiny zero-dependency server. Serves the page, resolves Google
 // Maps links, and keeps the shared restaurant list in data/restaurants.json.
 
 const http = require('http');
@@ -27,7 +27,7 @@ const PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || '';
 // Behind a reverse proxy (Caddy, nginx) set TRUST_PROXY=1 so the login
 // lockout counts the visitor's address, not the proxy's.
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
-const COOKIE = 'nasc_session';
+const COOKIE = 'foodmap_session';
 // Password checks are deliberately slow and memory-hungry; only this many run
 // at once, so a flood of logins can't stall or exhaust the server.
 const MAX_CONCURRENT_LOGINS = 2;
@@ -184,7 +184,7 @@ function isLoggedIn(req) {
 let loginsRunning = 0;
 
 async function login(req, res) {
-  if (!PASSWORD_HASH) return send(res, 503, { error: 'No admin password is set. On the server run: nasc-food set-password (or npm run set-password), then restart.' });
+  if (!PASSWORD_HASH) return send(res, 503, { error: 'No admin password is set. On the server run: kevins-food-map set-password (or npm run set-password), then restart.' });
   const ip = clientIp(req);
   const wait = auth.lockedFor(ip);
   if (wait) return send(res, 429, { error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60000)} min.` }, undefined, { 'Retry-After': String(Math.ceil(wait / 1000)) });
@@ -397,7 +397,7 @@ if (require.main === module) {
   }
   server.listen(PORT, HOST, () => {
     const shown = HOST === '127.0.0.1' || HOST === '0.0.0.0' ? 'localhost' : HOST;
-    console.log(`NASC Food running at http://${shown}:${PORT}`);
+    console.log(`Kevin's Food Map running at http://${shown}:${PORT}`);
     if (!BROWSER_KEY) console.warn('  ! No GOOGLE_MAPS_API_KEY: the map will not load (list still works).');
     if (!SERVER_KEY) console.warn('  ! No Places key: added restaurants will have name and pin only, no phone/address.');
     if (BROWSER_KEY && BROWSER_KEY === SERVER_KEY && TRUST_PROXY) console.warn('  ! One key is used for the map and for Places. Visitors can see it, so anyone could run Places lookups on your bill: set daily quotas, or split it into two keys (README, "Google setup").');

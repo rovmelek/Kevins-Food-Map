@@ -1,6 +1,8 @@
-# NASC Food
+# Kevin's Food Map
 
 Restaurants on a Google Map. Left panel: search by name, a **Filter** button to pick one or more food types, and cards sorted by distance. Right panel: the map, showing whatever the filter shows. Adding, editing and archiving happen in the password-protected **Manage** window.
+
+> Renamed from NASC Food on 2026-10-18. The server command and service are now `kevins-food-map`. If you installed the old `nasc-food` service, remove it first: `sudo systemctl disable --now nasc-food && sudo rm -f /etc/systemd/system/nasc-food.service /usr/local/bin/nasc-food && sudo systemctl daemon-reload`, then pull and run `bin/kevins-food-map install`.
 
 ## Run it
 
@@ -24,20 +26,20 @@ On a Linux server with systemd (e.g. Ubuntu), install it as a service so it star
 ```sh
 git clone https://github.com/rovmelek/NASC-Food.git && cd NASC-Food
 cp .env.example .env && chmod 600 .env   # add your key and office location
-bin/nasc-food install     # asks for sudo; adds the `nasc-food` command
-nasc-food set-password
-nasc-food start
+bin/kevins-food-map install     # asks for sudo; adds the `kevins-food-map` command
+kevins-food-map set-password
+kevins-food-map start
 ```
 
 | Command | What it does |
 | --- | --- |
-| `nasc-food start` / `stop` / `restart` | control the service |
-| `nasc-food status` | is it running, and recent log lines |
-| `nasc-food logs` | follow the log (Ctrl+C to exit) |
-| `nasc-food set-password` | set or change the Manage password (then `restart`) |
-| `nasc-food test` | run the automated tests |
-| `nasc-food update` | pull new code, run the tests, restart if they pass; if they fail or you press Ctrl+C, go back to the previous code |
-| `nasc-food uninstall` | remove the service (keeps your data) |
+| `kevins-food-map start` / `stop` / `restart` | control the service |
+| `kevins-food-map status` | is it running, and recent log lines |
+| `kevins-food-map logs` | follow the log (Ctrl+C to exit) |
+| `kevins-food-map set-password` | set or change the Manage password (then `restart`) |
+| `kevins-food-map test` | run the automated tests |
+| `kevins-food-map update` | pull new code, run the tests, restart if they pass; if they fail or you press Ctrl+C, go back to the previous code |
+| `kevins-food-map uninstall` | remove the service (keeps your data) |
 
 The server only listens on `127.0.0.1:3000`. To reach it from the internet, put a web server with HTTPS in front of it; location sharing in browsers only works over HTTPS. With [Caddy](https://caddyserver.com/), which gets certificates automatically, the whole config is:
 
@@ -51,11 +53,11 @@ Behind a proxy like this (keep the default `HOST=127.0.0.1` so nobody can reach 
 
 Install as a normal user with sudo, not as root, so the service doesn't run as root. Install from a path without spaces.
 
-**Updates and the restaurant list.** The list on the server is the live one. `nasc-food update` sets it aside, pulls the new code, and puts it back, so an update never fails on it or replaces it. Changes to `data/restaurants.json` made in GitHub are not applied on the server; the update says so when that happens. To move the list to a new server, copy that file. Over SSH, run the update inside `tmux` or `screen`, so a dropped connection can't interrupt it halfway (it would roll back, but the service may stay stopped if `sudo` needs a password).
+**Updates and the restaurant list.** The list on the server is the live one. `kevins-food-map update` sets it aside, pulls the new code, and puts it back, so an update never fails on it or replaces it. Changes to `data/restaurants.json` made in GitHub are not applied on the server; the update says so when that happens. To move the list to a new server, copy that file. Over SSH, run the update inside `tmux` or `screen`, so a dropped connection can't interrupt it halfway (it would roll back, but the service may stay stopped if `sudo` needs a password).
 
 **Backups.** Before the first change of each day, the server copies the list to `data/backups/restaurants-YYYY-MM-DD.json` and keeps the last 14. To undo a mistake, stop the server, copy a backup over `data/restaurants.json`, and start it again.
 
-**Monitoring.** `GET /healthz` answers 200 `{"ok":true}`, or 503 if the last save to disk failed. The log (`nasc-food logs`) has one line per API request and the details of any error.
+**Monitoring.** `GET /healthz` answers 200 `{"ok":true}`, or 503 if the last save to disk failed. The log (`kevins-food-map logs`) has one line per API request and the details of any error.
 
 ## Google setup
 

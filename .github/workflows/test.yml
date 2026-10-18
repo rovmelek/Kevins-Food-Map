@@ -17,4 +17,4 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm test
-      - run: bash -n bin/nasc-food
+      - run: bash -n bin/kevins-food-map

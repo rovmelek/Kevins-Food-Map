@@ -124,7 +124,7 @@ test("fails (doesn't add unchecked) when Google can't be asked", async () => {
 });
 
 test('HTTP API: add (bulk), dedupe, edit, archive, restore, purge, persistence', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nascfood-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'foodmap-'));
   process.env.DATA_FILE = path.join(dir, 'r.json');
   for (const k of ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY', 'OFFICE_LAT', 'OFFICE_LNG', 'OFFICE_NAME', 'TRUST_PROXY']) delete process.env[k];
   process.env.ADMIN_PASSWORD_HASH = await auth.hashPassword('test password 123');
@@ -146,7 +146,7 @@ test('HTTP API: add (bulk), dedupe, edit, archive, restore, purge, persistence',
     assert.strictEqual(sw, 401);
     const [sl, , setCookie] = await j('/api/auth/login', { method: 'POST', body: JSON.stringify({ password: 'test password 123' }) });
     assert.strictEqual(sl, 200);
-    assert.match(setCookie, /nasc_session=[^;]+; Path=\/api; HttpOnly; SameSite=Strict/);
+    assert.match(setCookie, /foodmap_session=[^;]+; Path=\/api; HttpOnly; SameSite=Strict/);
     assert.doesNotMatch(setCookie, /Secure/, 'no Secure flag over plain http');
     cookie = setCookie.split(';')[0];
     assert.deepStrictEqual((await j('/api/auth/session'))[1], { passwordSet: true, loggedIn: true });
@@ -216,7 +216,7 @@ test('HTTP API: add (bulk), dedupe, edit, archive, restore, purge, persistence',
     const trav = await fetch(base + '/..%2fserver.js');
     assert.notStrictEqual(trav.status, 200);
     const page = await fetch(base + '/');
-    assert.match(await page.text(), /NASC Food/);
+    assert.match(await page.text(), /Kevin's Food Map/);
   } finally {
     srv.close();
   }

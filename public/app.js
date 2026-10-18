@@ -1,5 +1,5 @@
 'use strict';
-// NASC Food front end: left panel (search, filter, cards) + right map, and a
+// Kevin's Food Map front end: left panel (search, filter, cards) + right map, and a
 // password-protected Manage window for adding, editing and archiving.
 
 const state = {
@@ -427,7 +427,7 @@ function renderManage() {
   $('password').disabled = $('loginSubmit').disabled = !state.passwordSet;
   $('loginHint').innerHTML = state.passwordSet
     ? 'Enter the admin password to add, edit or archive restaurants.'
-    : 'No admin password is set yet. On the server, run <code>npm run set-password</code> (or <code>nasc-food set-password</code>), then restart it.';
+    : 'No admin password is set yet. On the server, run <code>npm run set-password</code> (or <code>kevins-food-map set-password</code>), then restart it.';
   document.querySelectorAll('#manageView [role=tab]').forEach(t => {
     const on = t.dataset.view === state.manageView;
     t.classList.toggle('active', on);

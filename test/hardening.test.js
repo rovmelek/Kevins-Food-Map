@@ -13,7 +13,7 @@ const { resolveLink, expandShortLink } = require('../lib/resolve');
 const { createStore } = require('../lib/store');
 const auth = require('../lib/auth');
 
-const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'nascfood-'));
+const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'foodmap-'));
 
 // A fresh server module with its own env and data file.
 async function startServer(env = {}) {
@@ -191,13 +191,13 @@ test('link parsing edge cases', async () => {
 test('.env loader handles export, quotes with comments, and keeps real env vars', () => {
   const { loadDotEnv } = require('../server');
   const file = path.join(tmpdir(), '.env');
-  fs.writeFileSync(file, 'export NASC_T1=a\nNASC_T2="b c" # note\nNASC_T3=d # note\nNASC_T4=has#hash\nPATH=nope\n');
+  fs.writeFileSync(file, 'export FM_T1=a\nFM_T2="b c" # note\nFM_T3=d # note\nFM_T4=has#hash\nPATH=nope\n');
   const before = process.env.PATH;
   loadDotEnv(file);
   try {
-    assert.deepStrictEqual([process.env.NASC_T1, process.env.NASC_T2, process.env.NASC_T3, process.env.NASC_T4], ['a', 'b c', 'd', 'has#hash']);
+    assert.deepStrictEqual([process.env.FM_T1, process.env.FM_T2, process.env.FM_T3, process.env.FM_T4], ['a', 'b c', 'd', 'has#hash']);
     assert.strictEqual(process.env.PATH, before);
-  } finally { for (const k of ['NASC_T1', 'NASC_T2', 'NASC_T3', 'NASC_T4']) delete process.env[k]; }
+  } finally { for (const k of ['FM_T1', 'FM_T2', 'FM_T3', 'FM_T4']) delete process.env[k]; }
 });
 
 test('a login whose body arrives after the lockout is still refused', async () => {

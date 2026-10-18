@@ -79,7 +79,7 @@ async function main() {
     fs.rmSync(tmp, { force: true });
     throw e;
   }
-  console.log(`Saved to ${ENV}. Restart the server (nasc-food restart, or npm start) to use it.`);
+  console.log(`Saved to ${ENV}. Restart the server (kevins-food-map restart, or npm start) to use it.`);
 }
 
 main().catch(e => { console.error(e.message); process.exit(1); });

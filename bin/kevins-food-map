@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# nasc-food: manage the NASC Food server as a systemd service.
-#   nasc-food install     install and enable the service (starts on boot)
-#   nasc-food start|stop|restart|status
-#   nasc-food logs        follow the server log (Ctrl+C to exit)
-#   nasc-food test        run the automated tests
-#   nasc-food set-password  set the password for the Manage window
-#   nasc-food update      pull new code (keeps this server's restaurant list),
+# kevins-food-map: manage the Kevin's Food Map server as a systemd service.
+#   kevins-food-map install     install and enable the service (starts on boot)
+#   kevins-food-map start|stop|restart|status
+#   kevins-food-map logs        follow the server log (Ctrl+C to exit)
+#   kevins-food-map test        run the automated tests
+#   kevins-food-map set-password  set the password for the Manage window
+#   kevins-food-map update      pull new code (keeps this server's restaurant list),
 #                         run tests, restart if they pass, else roll back
-#   nasc-food uninstall   stop and remove the service
+#   kevins-food-map uninstall   stop and remove the service
 set -euo pipefail
 
-SERVICE=nasc-food
+SERVICE=kevins-food-map
 UNIT=/etc/systemd/system/$SERVICE.service
 DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 
@@ -39,10 +39,10 @@ render_unit() {
   [ -n "$user" ] || user="${SUDO_USER:-$(id -un)}"
   check_path "$DIR"; check_path "$node"
   if [ "$user" = root ]; then
-    echo "Warning: the service will run as root. Safer: create a user (sudo adduser nascfood), put the app in its home, and run install as that user with sudo." >&2
+    echo "Warning: the service will run as root. Safer: create a user (sudo adduser foodmap), put the app in its home, and run install as that user with sudo." >&2
   fi
   sed -e "s|@USER@|$user|g" -e "s|@DIR@|$DIR|g" -e "s|@NODE@|$node|g" \
-    "$DIR/deploy/nasc-food.service.in" | sudo_ tee "$UNIT" > /dev/null
+    "$DIR/deploy/kevins-food-map.service.in" | sudo_ tee "$UNIT" > /dev/null
   sudo_ systemctl daemon-reload
   echo "Service runs as $user from $DIR with $node."
 }
@@ -54,8 +54,8 @@ cmd_install() {
   [ -f "$DIR/$DATA" ] || echo '[]' > "$DIR/$DATA"
   render_unit
   sudo_ systemctl enable "$SERVICE"
-  sudo_ ln -sf "$DIR/bin/nasc-food" /usr/local/bin/nasc-food
-  echo "Installed. Start it with: nasc-food start"
+  sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
+  echo "Installed. Start it with: kevins-food-map start"
 }
 
 cmd_uninstall() {
@@ -63,7 +63,7 @@ cmd_uninstall() {
   sudo_ systemctl disable --now "$SERVICE"
   sudo_ rm -f "$UNIT"
   sudo_ systemctl daemon-reload
-  [ "$(readlink -f /usr/local/bin/nasc-food 2>/dev/null)" = "$DIR/bin/nasc-food" ] && sudo_ rm -f /usr/local/bin/nasc-food
+  [ "$(readlink -f /usr/local/bin/kevins-food-map 2>/dev/null)" = "$DIR/bin/kevins-food-map" ] && sudo_ rm -f /usr/local/bin/kevins-food-map
   echo "Removed. Your data in $DIR/data is untouched."
 }
 
@@ -87,7 +87,7 @@ roll_back() {
   if git -C "$DIR" reset --keep "$old"; then
     echo "The code was rolled back to $(git -C "$DIR" rev-parse --short HEAD)." >&2
   else
-    echo "Couldn't roll the code back to $old (see above); the service stays stopped. Fix it, then: nasc-food start" >&2
+    echo "Couldn't roll the code back to $old (see above); the service stays stopped. Fix it, then: kevins-food-map start" >&2
     running=0
   fi
 }
@@ -98,7 +98,7 @@ on_exit() {
   if [ "$tested" = 0 ] && [ "$(git -C "$DIR" rev-parse HEAD)" != "$old" ]; then roll_back; fi
   put_back
   if [ "$running" = 1 ] && ! sudo_ systemctl start "$SERVICE"; then
-    echo "The service is stopped and couldn't be started. Run: nasc-food start" >&2
+    echo "The service is stopped and couldn't be started. Run: kevins-food-map start" >&2
   fi
 }
 put_back() {
@@ -153,7 +153,7 @@ case "${1:-}" in
   status)    need_unit; systemctl --no-pager status "$SERVICE" ;;
   logs)      need_unit; sudo_ journalctl -u "$SERVICE" -f --no-pager ;;
   test)      cd "$DIR" && npm test ;;
-  set-password) cd "$DIR" && node scripts/set-password.js && { [ -f "$UNIT" ] && echo "Then: nasc-food restart" || true; } ;;
+  set-password) cd "$DIR" && node scripts/set-password.js && { [ -f "$UNIT" ] && echo "Then: kevins-food-map restart" || true; } ;;
   update)    cmd_update ;;
   *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
