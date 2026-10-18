@@ -24,7 +24,7 @@ Location permission only works on `localhost` or HTTPS. If it is denied, the lis
 On a Linux server with systemd (e.g. Ubuntu), install it as a service so it starts on boot and restarts itself after a crash:
 
 ```sh
-git clone https://github.com/rovmelek/NASC-Food.git && cd NASC-Food
+git clone https://github.com/rovmelek/Kevins-Food-Map.git && cd Kevins-Food-Map
 cp .env.example .env && chmod 600 .env   # add your key and office location
 bin/kevins-food-map install     # asks for sudo; adds the `kevins-food-map` command
 kevins-food-map set-password
