@@ -10,7 +10,8 @@ const path = require('path');
 const readline = require('readline');
 const { hashPassword } = require('../lib/auth');
 
-const ENV = path.join(__dirname, '..', '.env');
+// ENV_FILE: the same override the server honours (used by the Docker setup).
+const ENV = process.env.ENV_FILE ? path.resolve(process.env.ENV_FILE) : path.join(__dirname, '..', '.env');
 const EXAMPLE = path.join(__dirname, '..', '.env.example');
 const MIN_LENGTH = 10;
 
@@ -57,7 +58,7 @@ async function main() {
     let first = true;
     env = env.replace(existing, () => (first ? ((first = false), line) : '')).replace(/\n{3,}/g, '\n\n');
   } else {
-    env = `${env.replace(/\s*$/, '\n')}\n# Admin password for Manage (a hash, set with: npm run set-password)\n${line}\n`;
+    env = `${env.replace(/\s*$/, '\n')}\n# Admin password for Manage (a hash, set with: npm run set-password, kevins-food-map set-password, or docker compose run --rm set-password)\n${line}\n`;
   }
   // Write a private temp file and rename it over .env, so the file is never
   // half-written and ends up readable only by its owner even if it was not.
@@ -79,7 +80,8 @@ async function main() {
     fs.rmSync(tmp, { force: true });
     throw e;
   }
-  console.log(`Saved to ${ENV}. Restart the server (kevins-food-map restart, or npm start) to use it.`);
+  // In Docker, ENV is the container's path (/config/.env), which means nothing on the server.
+  console.log(`Saved to ${process.env.ENV_FILE ? 'the app\'s .env' : ENV}. Restart the server to use it: kevins-food-map restart, npm start, or, with Docker, docker compose restart app.`);
 }
 
 main().catch(e => { console.error(e.message); process.exit(1); });

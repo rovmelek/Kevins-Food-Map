@@ -12,6 +12,11 @@ data/backups/
 data/settings.json
 data/settings.json.bad-*
 
+# Docker setup: live data, Caddy's certificates, and per-server settings
+docker-data/
+docker/.env
+docker/Caddyfile
+
 node_modules/
 *.log
 .DS_Store

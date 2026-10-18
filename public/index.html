@@ -126,7 +126,7 @@
         </form>
         <details class="server-only">
           <summary>Set on the server only</summary>
-          <p class="hint">For safety these can't be changed here. Edit <code>.env</code> on the server, then run <code>kevins-food-map restart</code> (or restart <code>npm start</code>). The password: <code>kevins-food-map set-password</code>.</p>
+          <p class="hint">For safety these can't be changed here. Edit <code>.env</code> on the server, then run <code>kevins-food-map restart</code> (or restart <code>npm start</code>; with Docker, <code>docker compose restart app</code>). The password: <code>kevins-food-map set-password</code> (with Docker, <code>docker compose run --rm set-password</code>).</p>
           <ul id="serverOnly"></ul>
         </details>
       </section>

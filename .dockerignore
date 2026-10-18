@@ -1,0 +1,15 @@
+# Kept out of the image: secrets, live data and anything not needed to run.
+.git
+.github
+.env
+.env.*
+*.env
+!.env.example
+data/settings.json*
+data/backups
+data/*.tmp
+data/*.keep
+docker-data
+docker
+node_modules
+*.log

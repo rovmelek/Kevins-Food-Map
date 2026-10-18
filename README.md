@@ -15,6 +15,7 @@ It is a single Node.js server with no npm dependencies, a plain HTML/CSS/JavaScr
 - [Using the app](#using-the-app)
 - [Running on a server](#running-on-a-server)
   - [HTTPS with Caddy, step by step](#https-with-caddy-step-by-step)
+  - [Running with Docker](#running-with-docker)
 - [Google setup](#google-setup)
 - [Architecture](#architecture)
 - [Security](#security)
@@ -313,9 +314,266 @@ Then check it and restart Apache (needed once after enabling modules): `sudo apa
 
 Set `TRUST_PROXY=1` in `.env` and leave `HOST` at its default, as in Step 5. The app uses the last `X-Forwarded-For` entry, the one your proxy adds, so a visitor can't fake their address. Before going public, also read the key notes in [Google setup](#google-setup).
 
+### Running with Docker
+
+This is another way to run the app on a server, instead of [Install as a service](#install-as-a-service) plus [HTTPS with Caddy](#https-with-caddy-step-by-step). Use one of the two on a server, not both. Docker runs two **containers**, small sealed-off boxes that each hold one program and everything it needs:
+
+- **app**: this app, on Node 24. It can't be reached from outside the server; visitors only reach it through Caddy.
+- **caddy**: the [Caddy](https://caddyserver.com/) web server. It answers visitors on the web ports, gets the HTTPS certificate, and passes requests on to the app.
+
+The files for this are in the repository: `Dockerfile` (how to build the app's container) and the `docker/` folder (`compose.yml` says how the two containers run together, and `Caddyfile.example` is an example of Caddy's settings). The server needs only Docker, not Node or Caddy.
+
+**Who runs what**
+
+| Program | Runs as | Started by |
+| --- | --- | --- |
+| Docker itself | root (it is a system service) | systemd, set up when you install Docker |
+| The app container | your own user | Docker, from `docker compose up -d` |
+| The Caddy container | your own user, allowed to use ports 80 and 443 and nothing more | Docker, from `docker compose up -d` |
+
+You type every command as your normal user. Commands with `sudo` in front ask for your password. Both containers start again by themselves after a crash or a reboot.
+
+**What lives on the server, outside the containers.** None of it is in git, so `git pull` never touches it. A container can be deleted and rebuilt at any time; everything that matters is here:
+
+| File or folder (in the app's folder) | What it holds |
+| --- | --- |
+| `.env` | Your Google key, the office location and the Manage password (as a hash). The app can read it but not change it. |
+| `docker/.env` | Which user the containers run as. A different file from the `.env` above. |
+| `docker/Caddyfile` | Caddy's settings, with your domain name. |
+| `docker-data/app/` | The live restaurant list, `settings.json` and the daily backups. |
+| `docker-data/caddy/` | Caddy's certificates. |
+
+**What you need first**
+- An Ubuntu server that is reachable from the internet.
+- A domain name you control, for example `food.example.com`. Wherever this guide says `food.yourdomain.com`, use your own name.
+- Your Google key ([Google setup](#google-setup)).
+
+#### Docker step 1: Make room on the server
+
+If this server already runs the app as a service, or Caddy installed with `apt` (from the guides above), turn them off first, or they keep the web ports busy. Skip a line for anything you never installed:
+
+```sh
+kevins-food-map stop && kevins-food-map uninstall   # the app's service (your data is kept)
+sudo systemctl disable --now caddy                  # Caddy installed with apt
+```
+
+Then check that nothing else uses the web ports:
+
+```sh
+sudo ss -ltnp '( sport = :80 or sport = :443 )'
+```
+
+It should show only a heading line. If it lists `apache2` or `nginx`, read the start of [Step 3: Install Caddy](#step-3-install-caddy) for what to do.
+
+#### Docker step 2: Point your domain at the server and open the ports
+
+Do [Step 1](#step-1-point-your-domain-at-the-server) and [Step 2](#step-2-open-the-web-ports) of the Caddy guide: the DNS record, and ports 80 and 443. Wait until `nslookup food.yourdomain.com` shows your server's IP address.
+
+Good to know: ports that Docker opens are not blocked by the `ufw` firewall, even if `ufw` says they are, so with Docker the `ufw` commands are optional. The hosting company's own firewall still matters. That is fine here, because Docker opens only 80 and 443. Port 3000 is never opened; the app is reachable only through Caddy.
+
+#### Docker step 3: Install Docker
+
+These commands come from Docker's install guide for Ubuntu. They add Docker's official package source, then install Docker and its `compose` command. If `apt` asks "Do you want to continue?", press Enter.
+
+First these lines:
+
+```sh
+sudo apt update
+sudo apt install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+```
+
+Then this block, pasted all at once (everything from `sudo tee` down to `EOF`):
+
+```sh
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+```
+
+Then install Docker and try it:
+
+```sh
+sudo apt update
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo docker run hello-world      # should print "Hello from Docker!"
+```
+
+So that you don't have to type `sudo` before every `docker` command, add yourself to the `docker` group, then log out and back in:
+
+```sh
+sudo usermod -aG docker $USER
+```
+
+Be aware that anyone in the `docker` group can do anything on the server, as if they were root. Add only yourself. If you'd rather not, skip this and put `sudo` in front of every `docker` command below.
+
+Check: after logging back in, `docker compose version` prints a version number.
+
+#### Docker step 4: Get the app and fill in `.env`
+
+If you are switching from the service on this same server and its folder is `~/Kevins-Food-Map`, rename the old folder first, so the new copy can take its name: `mv ~/Kevins-Food-Map ~/Kevins-Food-Map-old`. Wherever the old folder is, this guide calls it `~/Kevins-Food-Map-old` from now on; use its real place if it is somewhere else.
+
+```sh
+cd ~
+git clone https://github.com/rovmelek/Kevins-Food-Map.git
+cd Kevins-Food-Map
+cp .env.example .env && chmod 600 .env
+nano .env
+```
+
+In `.env`, fill in `GOOGLE_MAPS_API_KEY` and the office location, as in [Configuration](#configuration). Leave out `HOST`, `PORT`, `TRUST_PROXY` and `DATA_FILE`: the Docker setup sets them itself, and ignores them in `.env`. Leave `ADMIN_PASSWORD_HASH` alone; step 7 fills it in. Save with Ctrl+O and Enter, leave with Ctrl+X.
+
+If you are switching from the service, copy its `.env` instead of filling in a new one: `cp ~/Kevins-Food-Map-old/.env .env`. If the old folder belongs to a dedicated user (`/srv/kevins-food-map`), use `sudo cp /srv/kevins-food-map/.env .env && sudo chown "$USER": .env`.
+
+#### Docker step 5: Tell Docker which user to run as, and make the data folders
+
+Still in the app's folder (`~/Kevins-Food-Map`). Copy these lines exactly; they fill in your own user number by themselves:
+
+```sh
+printf 'APP_UID=%s\nAPP_GID=%s\n' "$(id -u)" "$(id -g)" > docker/.env
+cat docker/.env      # shows two lines, for example APP_UID=1000 and APP_GID=1000; not 0
+mkdir -p docker-data/app docker-data/caddy/data docker-data/caddy/config
+```
+
+If it shows `APP_UID=0`, you are logged in as root, and the containers would run as root: log in as your normal user and start again from step 4.
+
+Make the folders **before** the first start. If Docker has to create them, they belong to root, and the containers can't write to them.
+
+Then put a restaurant list in. Pick one:
+- **Start from the list in the repository:** `cp data/restaurants.json docker-data/app/`
+- **Bring your existing list** from the service: `cp ~/Kevins-Food-Map-old/data/restaurants.json docker-data/app/`. If you changed anything in Manage → Settings, also `cp ~/Kevins-Food-Map-old/data/settings.json docker-data/app/`. To keep the old daily backups too: `cp -r ~/Kevins-Food-Map-old/data/backups docker-data/app/`. If the old folder belongs to a dedicated user, use `sudo cp` and then `sudo chown -R "$USER": docker-data/app`.
+
+Without a list the app starts empty.
+
+#### Docker step 6: Tell Caddy your domain name
+
+```sh
+cp docker/Caddyfile.example docker/Caddyfile
+sed -i 's/food\.example\.com/food.yourdomain.com/g' docker/Caddyfile    # use your real name
+grep -c example.com docker/Caddyfile                                   # should print 0
+```
+
+The important part of the file is just this:
+
+```caddyfile
+food.yourdomain.com {
+	encode zstd gzip
+	reverse_proxy app:3000
+}
+```
+
+It means: "for visitors to this name, compress the answers and pass everything on to the app container." Caddy adds the HTTPS certificate, sends `http://` visitors to `https://`, and tells the app each visitor's real address.
+
+If you also created the `www.` DNS record (Caddy guide, Step 1), open the file with `nano docker/Caddyfile` and remove the `#` at the start of the last three lines. Save with Ctrl+O and Enter, leave with Ctrl+X.
+
+#### Docker step 7: Build the app and set the Manage password
+
+From here on, type the commands in the `docker` folder:
+
+```sh
+cd ~/Kevins-Food-Map/docker
+docker compose build                     # builds the app's container; takes a minute the first time
+docker compose run --rm set-password     # type the Manage password twice (at least 10 characters)
+```
+
+If you copied an old `.env` that already has a password, you can skip `set-password`.
+
+#### Docker step 8: Start it
+
+```sh
+docker compose up -d
+docker compose ps
+```
+
+`docker compose ps` lists `app` and `caddy`. Wait a few seconds and run it again, until `app` says `(healthy)`.
+
+Then check it as in [Step 6](#step-6-check-that-it-works) of the Caddy guide: open `https://food.yourdomain.com`, look for the padlock, and log in to **Manage**. Your Google key's **Websites** restriction must include the new address ([Google setup](#google-setup)).
+
+#### Docker: day-to-day commands
+
+Type these in the `docker` folder (`cd ~/Kevins-Food-Map/docker`).
+
+| Command | What it does |
+| --- | --- |
+| `docker compose ps` | Are both containers running? `app` should say `(healthy)`. |
+| `docker compose logs -f app` | Follow the app's log (Ctrl+C to exit). Use `caddy` in place of `app` for Caddy's log. |
+| `docker compose restart app` | Do this after editing `.env`. |
+| `docker compose restart caddy` | Do this after editing `docker/Caddyfile`. |
+| `docker compose run --rm set-password` | Change the Manage password; then `docker compose restart app`. |
+| `docker compose run --rm app node --test "test/*.test.js"` | Run the automated tests inside the container. |
+| `docker compose down` | Stop and remove both containers. Your data stays; `docker compose up -d` starts them again. |
+
+**Updating the app**
+
+```sh
+cd ~/Kevins-Food-Map
+git rev-parse HEAD > ~/food-map-previous-version   # notes which version you have now
+git pull
+cd docker
+docker compose build
+docker compose run --rm app node --test "test/*.test.js"    # the last lines should say "fail 0"
+docker compose up -d                                        # only if the tests passed
+```
+
+The running site keeps working until the last line, which swaps in the new version. If the tests fail (then skip that line), or the site misbehaves after the update, go back to the version you noted:
+
+```sh
+cd ~/Kevins-Food-Map && git reset --hard "$(cat ~/food-map-previous-version)"
+cd docker && docker compose build && docker compose up -d
+```
+
+`git pull` never changes the live list, because the live list is in `docker-data/app/`, not in `data/`. To update Caddy too: `docker compose pull caddy && docker compose up -d`.
+
+**Backups.** Before the first change of each day, the app copies the list into `docker-data/app/backups/` and keeps the last 14. To undo a mistake, in the `docker` folder (`ls ../docker-data/app/backups` lists them; use the date you want):
+
+```sh
+docker compose stop app
+cp ../docker-data/app/backups/restaurants-2026-01-31.json ../docker-data/app/restaurants.json
+docker compose start app
+```
+
+For a full backup of the server, keep a copy of `.env`, `docker/Caddyfile` and the whole `docker-data/` folder.
+
+**Moving to another server.**
+1. On the new server, do step 1, the ports part of step 2 (not the DNS record yet), step 3, step 4 without filling in `.env`, and the `printf` line of step 5 (your user number may be different there).
+2. On the old server, stop the site, so that no change made in Manage gets lost: `cd ~/Kevins-Food-Map/docker && docker compose down`.
+3. On the new server, copy the files over (replace `you@old-server` with your login on the old server):
+   ```sh
+   cd ~/Kevins-Food-Map
+   scp you@old-server:Kevins-Food-Map/.env .
+   scp you@old-server:Kevins-Food-Map/docker/Caddyfile docker/
+   scp -r you@old-server:Kevins-Food-Map/docker-data .
+   chmod 600 .env
+   ```
+4. Point the DNS record at the new server's IP address (Caddy guide, [Step 1](#step-1-point-your-domain-at-the-server)).
+5. On the new server, do steps 7 (only `docker compose build`) and 8.
+
+#### Docker: when something goes wrong
+
+| What you see | What to do |
+| --- | --- |
+| `permission denied` and `docker.sock` | You aren't in the `docker` group yet: log out and back in, or put `sudo` in front. |
+| `no configuration file provided` | You aren't in the `docker` folder: `cd ~/Kevins-Food-Map/docker`. |
+| Saving in Manage fails ("Couldn't save"), and `docker compose logs app` says `EACCES` or "permission denied" | The `docker-data` folders belong to root (Docker created them before step 5, or they were copied with `sudo`). Run `sudo chown -R "$(id -u):$(id -g)" ../docker-data` and then `docker compose restart`. |
+| `caddy` keeps restarting, and its log says "address already in use" | Another web server has the ports; see Docker step 1. |
+| A security or SSL error instead of the page | Caddy couldn't get the certificate yet, usually because of DNS or a closed port (Docker step 2). Look at `docker compose logs caddy`, fix the cause, then `docker compose restart caddy`. |
+| "502 Bad Gateway" | Caddy works, but the app isn't running. `docker compose logs app` shows why. |
+| The map stays grey | The Google key's **Websites** restriction doesn't include the new address; see [Google setup](#google-setup). |
+| You edited `.env` or the Caddyfile and nothing changed | Restart that container (see the table above). |
+
+The app's log lists each visitor's address. Visitors who arrive over IPv6 show up as one shared `172.x.x.x` address, because this setup doesn't give the containers IPv6. Then one such person's wrong passwords would lock all of them out of Manage. To avoid it, give your domain only an `A` record (IPv4), as in Step 1, and no `AAAA` record.
+
 ### Data, updates and backups
 
-- **The live list.** `data/restaurants.json` is tracked in git so the list can travel with the code, but the copy on the server is the live one. `kevins-food-map update` sets it aside, pulls, and puts it back, so an update never replaces it; if GitHub has a different version, the update says so and keeps the server's. To move the list to another server, copy the file.
+- **The live list.** `data/restaurants.json` is tracked in git so the list can travel with the code, but the copy on the server is the live one. `kevins-food-map update` sets it aside, pulls, and puts it back, so an update never replaces it; if GitHub has a different version, the update says so and keeps the server's. To move the list to another server, copy the file. (With Docker, the live list is `docker-data/app/restaurants.json`; see [Running with Docker](#running-with-docker).)
+- **With Docker** all of this lives in `docker-data/app/` instead of `data/`; see [Running with Docker](#running-with-docker). The rest of this list is about the service.
 - **Settings.** `data/settings.json` is never committed (`.gitignore`). `update` leaves it alone and `move` takes it along. If you point `DATA_FILE` at another folder inside the repo, ignore `settings.json` there too.
 - **Backups.** Before the first change of each day the server copies the list to `data/backups/restaurants-YYYY-MM-DD.json` and keeps the last 14. To undo a mistake: stop the service, copy a backup over `data/restaurants.json`, start it again. Settings are not backed up.
 - **Updating over SSH.** Run the update inside `tmux` or `screen`. A dropped connection would roll it back, but the service may stay stopped if `sudo` asks for a password.
@@ -323,7 +581,7 @@ Set `TRUST_PROXY=1` in `.env` and leave `HOST` at its default, as in Step 5. The
 ### Monitoring
 
 - `GET /healthz` returns `200 {"ok":true,"restaurants":N}`, or `503` if the last save to disk failed. When `data/settings.json` is damaged it adds `"settings":"damaged"` and still returns 200, because the site keeps working on the `.env` values.
-- `kevins-food-map logs` shows one line per API request (with the visitor's IP address), every settings change, and the details of any error.
+- `kevins-food-map logs` (with Docker: `docker compose logs app`) shows one line per API request (with the visitor's IP address), every settings change, and the details of any error.
 
 ## Google setup
 
@@ -429,6 +687,7 @@ All responses are JSON; errors are `{ "error": "…" }` with a status code (400 
 - **Forged requests.** Changes must be JSON, which browsers can't send cross-site without permission, and a request the browser marks as cross-site (`Sec-Fetch-Site`) is refused.
 - **Page.** A strict Content Security Policy (Google's recommended one for Maps) with a fresh nonce per page load, so injected scripts can't run; everything shown is escaped first; the page can't be framed by other sites.
 - **Service.** The systemd unit runs as the user who installed it or the one given with `--user` (the script warns if that is root), may only write to `data/`, and has no extra privileges, devices or kernel access.
+- **Docker.** Both containers run as the server user named in `docker/.env`, never as root, with no extra privileges (Caddy may only use ports 80 and 443). The app's container is read-only except for `docker-data/app`, reads `.env` read-only, can't see Caddy's certificates, and is not published on any port. Secrets stay out of the image (`.dockerignore`).
 - **HTTPS.** Over plain HTTP the password crosses the network unencrypted, so use HTTPS anywhere but your own machine ([HTTPS with Caddy, step by step](#https-with-caddy-step-by-step)).
 - **Public data.** If the repository is public, so is any restaurant list committed to it.
 
@@ -453,9 +712,9 @@ Conventions:
 | The map doesn't load | `GOOGLE_MAPS_API_KEY` is set, Maps JavaScript API is enabled, and the key's website restriction includes your address. The browser console shows Google's exact error. |
 | Restaurants have no phone or address | No Places key, or Places API (New) isn't enabled on it. Fix the key, then select them and press **Update from Google**. |
 | "Use my location" does nothing | Location sharing only works on `localhost` or HTTPS, and the visitor must allow it. |
-| Manage says no password is set | Run `kevins-food-map set-password` (or `npm run set-password`), then restart. |
-| "Too many wrong passwords" | Wait 15 minutes, or restart the server to clear the lockout. Behind a proxy, make sure `TRUST_PROXY=1` is set, or everyone shares the proxy's address. |
-| `/healthz` returns 503 | The last save failed; `kevins-food-map logs` shows why (usually disk space or permissions on `data/`). |
+| Manage says no password is set | Run `kevins-food-map set-password` (or `npm run set-password`), then restart. With Docker: `docker compose run --rm set-password`, then `docker compose restart app`. |
+| "Too many wrong passwords" | Wait 15 minutes, or restart the server to clear the lockout (with Docker: `docker compose restart app`). Behind a proxy, make sure `TRUST_PROXY=1` is set, or everyone shares the proxy's address. |
+| `/healthz` returns 503 | The last save failed; `kevins-food-map logs` shows why (usually disk space or permissions on `data/`). With Docker: `docker compose logs app`, and see [Docker: when something goes wrong](#docker-when-something-goes-wrong). |
 | A leftover `nasc-food` service from an older install | Remove it: `sudo systemctl disable --now nasc-food && sudo rm -f /etc/systemd/system/nasc-food.service /usr/local/bin/nasc-food && sudo systemctl daemon-reload`, then run `bin/kevins-food-map install`. |
 
 ## License

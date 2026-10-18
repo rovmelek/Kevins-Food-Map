@@ -1,0 +1,23 @@
+# Caddy configuration for the Docker setup.
+#
+# Copy this file to docker/Caddyfile, put your own domain name in place of the
+# example domain below, then run (in the docker/ folder):
+#     docker compose restart caddy
+# Step-by-step guide: README.md, "Running with Docker".
+
+food.example.com {
+	# Compress pages and scripts so they load faster.
+	encode zstd gzip
+
+	# "app" is the app's container; Caddy reaches it over Docker's own
+	# network. Caddy adds the X-Forwarded-For and X-Forwarded-Proto headers.
+	reverse_proxy app:3000
+}
+
+# Optional: also accept www.food.example.com and send visitors to the main
+# address. Only if you created a DNS record for the www name: remove the # in
+# front of the three lines below (otherwise Caddy keeps failing to get a
+# certificate for it).
+#www.food.example.com {
+#	redir https://food.example.com{uri} permanent
+#}

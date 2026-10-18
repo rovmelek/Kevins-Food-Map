@@ -1,0 +1,93 @@
+# Kevin's Food Map with Docker: the app plus Caddy (HTTPS) in front of it.
+# Run every docker compose command from this folder (docker/). Don't edit this
+# file (git pull would clash with your changes); per-server settings go in
+# docker/.env and docker/Caddyfile.
+# Step-by-step guide: README.md, "Running with Docker".
+#
+# Folders on the server (all outside git, so `git pull` never touches them):
+#   ../.env                  the app's settings and password hash (read-only here)
+#   ../docker-data/app       the restaurant list, settings.json, backups
+#   ../docker-data/caddy     Caddy's certificates and state
+#   ./Caddyfile              your Caddy configuration (from Caddyfile.example)
+
+name: kevins-food-map
+
+services:
+  app:
+    build: ..
+    image: kevins-food-map
+    restart: unless-stopped
+    # Runs as you (APP_UID/APP_GID in docker/.env), so it can read ../.env
+    # and write ../docker-data/app, and never as root.
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    environment:
+      # Fixed for this setup: Caddy is the only way in.
+      HOST: 0.0.0.0
+      PORT: "3000"
+      TRUST_PROXY: "1"
+      DATA_FILE: /data/restaurants.json
+      ENV_FILE: /config/.env
+    volumes:
+      - ../docker-data/app:/data
+      # The app's folder, read-only, for ../.env (the folder rather than the
+      # file, so a missing .env can't turn into a folder owned by root).
+      - type: bind
+        source: ..
+        target: /config
+        read_only: true
+      # ...but hide docker-data in it: Caddy's certificate keys are not the app's business.
+      - type: tmpfs
+        target: /config/docker-data
+    # Not published: only Caddy (on the same Docker network) can reach port 3000.
+    expose:
+      - "3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    # Also runs as you, not as root. Its only extra right is to use the low
+    # ports 80 and 443.
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../docker-data/caddy/data:/data
+      - ../docker-data/caddy/config:/config
+
+  # Not a running service: `docker compose run --rm set-password` asks for the
+  # Manage password and saves its hash in ../.env.
+  set-password:
+    image: kevins-food-map
+    # Built by `docker compose build`; never look for it on Docker Hub.
+    pull_policy: never
+    profiles: [tools]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ENV_FILE: /config/.env
+    # Writable, because it saves ../.env by writing a new file and renaming it.
+    volumes:
+      - ..:/config
+      - type: tmpfs
+        target: /config/docker-data
+    command: ["node", "scripts/set-password.js"]

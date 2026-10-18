@@ -15,7 +15,8 @@ const auth = require('./lib/auth');
 // Which variables came from the real environment rather than .env (shown in Settings).
 const FROM_ENV = new Set(Object.keys(process.env));
 // Only when started as the app, so tests aren't affected by a local .env.
-if (require.main === module) loadDotEnv(path.join(__dirname, '.env'));
+// ENV_FILE points elsewhere (the Docker setup mounts it read-only).
+if (require.main === module) loadDotEnv(process.env.ENV_FILE || path.join(__dirname, '.env'));
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -229,7 +230,7 @@ function isLoggedIn(req) {
 let loginsRunning = 0;
 
 async function login(req, res) {
-  if (!PASSWORD_HASH) return send(res, 503, { error: 'No admin password is set. On the server run: kevins-food-map set-password (or npm run set-password), then restart.' });
+  if (!PASSWORD_HASH) return send(res, 503, { error: 'No admin password is set. On the server run: kevins-food-map set-password (or npm run set-password; with Docker, docker compose run --rm set-password), then restart.' });
   const ip = clientIp(req);
   const wait = auth.lockedFor(ip);
   if (wait) return send(res, 429, { error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60000)} min.` }, undefined, { 'Retry-After': String(Math.ceil(wait / 1000)) });
@@ -455,7 +456,7 @@ if (require.main === module) {
     if (!SERVER_KEY) console.warn('  ! No Places key: added restaurants will have name and pin only, no phone/address.');
     if (BROWSER_KEY && BROWSER_KEY === SERVER_KEY && TRUST_PROXY) console.warn('  ! One key is used for the map and for Places. Visitors can see it, so anyone could run Places lookups on your bill: set daily quotas, or split it into two keys (README, "Google setup").');
     if (PASSWORD_HASH.startsWith('argon2id$') && auth.algorithm !== 'argon2id') console.warn('  ! ADMIN_PASSWORD_HASH uses Argon2id, which needs Node.js 24.7+. Upgrade Node or run set-password again.');
-    if (!PASSWORD_HASH) console.warn('  ! No ADMIN_PASSWORD_HASH: Manage is locked. Run: npm run set-password');
+    if (!PASSWORD_HASH) console.warn('  ! No ADMIN_PASSWORD_HASH: Manage is locked. Run: kevins-food-map set-password (or npm run set-password; with Docker, docker compose run --rm set-password)');
     if (office().placeholder) console.warn('  ! No office location (OFFICE_LAT/OFFICE_LNG or Manage > Settings): using the ZIP 98683 default location.');
   });
 }
