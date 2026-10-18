@@ -10,11 +10,13 @@ const state = {
   cuisine: '',
   selectedId: null,
   loggedIn: false,
-  manageView: 'add',   // 'add' | 'edit'
+  passwordSet: false,
+  manageView: 'add',   // 'add' | 'restaurants'
   editSearch: '',
   checked: new Set(),  // ids ticked in the Manage list
   archived: [],        // archived restaurants, loaded only when logged in
   editShow: 'listed',  // 'listed' | 'archived'
+  busy: false,         // a Manage action is running; other actions wait
 };
 const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null };
 
@@ -24,27 +26,55 @@ const ICONS = {
   Seafood: '🦐', Steakhouse: '🥩', Sandwiches: '🥪', Vegetarian: '🥗', Breakfast: '🥞', Dessert: '🍨',
   Dumpling: '🥟', Noodles: '🍜', 'Middle Eastern': '🥙', Mediterranean: '🫒', Greek: '🥙', French: '🥖', American: '🍔', 'Fast food': '🍟',
 };
-const iconFor = c => ICONS[c] || '🍽️';
+const iconFor = c => (Object.hasOwn(ICONS, c) ? ICONS[c] : '🍽️');
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Links we render must be https; anything else (javascript:, data:) becomes inert.
+const safeUrl = u => (/^https:\/\//i.test(String(u ?? '')) ? String(u) : '#');
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // Google's star rating as five stars filled to the exact value, plus the
 // review count, linking to the place on Google Maps where the reviews are.
 function ratingHtml(r) {
-  if (r.rating == null) return '';
-  const pct = Math.max(0, Math.min(100, r.rating / 5 * 100));
-  const count = r.ratingCount != null ? ` (${r.ratingCount.toLocaleString()})` : '';
-  return `<a class="rating" href="${esc(r.mapsUrl)}" target="_blank" rel="noopener" title="Google rating ${r.rating} of 5 from ${r.ratingCount ?? 'unknown'} reviews">` +
-    `<span class="rating-num">${r.rating.toFixed(1)}</span><span class="stars" style="--pct:${pct}%" aria-hidden="true">★★★★★</span>${count}</a>`;
+  const rating = Number(r.rating);
+  if (r.rating == null || !Number.isFinite(rating)) return '';
+  const count = Number.isFinite(Number(r.ratingCount)) && r.ratingCount != null ? Number(r.ratingCount) : null;
+  const pct = Math.max(0, Math.min(100, rating / 5 * 100));
+  const label = `Google rating ${rating.toFixed(1)} out of 5${count != null ? `, ${count.toLocaleString()} reviews` : ''}`;
+  return `<a class="rating" href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener" aria-label="${esc(label)}" title="${esc(label)}">` +
+    `<span class="rating-num">${rating.toFixed(1)}</span><span class="stars" style="--pct:${pct}%" aria-hidden="true">★★★★★</span>` +
+    `${count != null ? `<span aria-hidden="true">(${count.toLocaleString()})</span>` : ''}</a>`;
 }
 
-const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
+// A 401 means the login expired: the Manage window switches to the login
+// form with a note, and callers can ignore the error (err.handled).
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && state.loggedIn) { state.loggedIn = false; renderManage(); }
+  if (res.status === 401 && state.loggedIn) {
+    state.loggedIn = false;
+    renderManage();
+    $('loginError').textContent = 'Your login expired. Log in again.';
+    if ($('manageDialog').open) $('password').focus();
+    throw Object.assign(new Error(data.error || 'Logged out'), { handled: true });
+  }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+const restaurantUrl = (id, suffix = '') => `/api/restaurants/${encodeURIComponent(id)}${suffix}`;
+
+// Re-render a container without losing keyboard focus: put focus back on the
+// same control of the same row (by data-id and data-act) afterwards.
+function keepFocus(root, render) {
+  const a = document.activeElement;
+  const inside = a && a !== root && root.contains(a);
+  const id = inside ? a.closest('[data-id]')?.dataset.id : null;
+  const act = inside ? a.dataset.act : null;
+  render();
+  if (!id) return;
+  const row = root.querySelector(`[data-id="${CSS.escape(id)}"]`);
+  (row?.querySelector(`[data-act="${act}"]`) || row?.querySelector('button, input'))?.focus();
 }
 
 // ---- distance & filtering --------------------------------------------------
@@ -73,49 +103,60 @@ function visible() {
 
 function renderFilterOptions() {
   const sel = $('cuisineFilter');
-  const counts = {};
-  for (const r of state.restaurants) counts[r.cuisine] = (counts[r.cuisine] || 0) + 1;
-  const names = Object.keys(counts).sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b));
-  if (state.cuisine && !counts[state.cuisine]) state.cuisine = '';
+  const counts = new Map();
+  for (const r of state.restaurants) counts.set(r.cuisine, (counts.get(r.cuisine) || 0) + 1);
+  const names = [...counts.keys()].sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b));
+  if (state.cuisine && !counts.has(state.cuisine)) state.cuisine = '';
   sel.innerHTML = `<option value="">All food types (${state.restaurants.length})</option>` +
-    names.map(n => `<option value="${esc(n)}">${iconFor(n)} ${esc(n)} (${counts[n]})</option>`).join('');
+    names.map(n => `<option value="${esc(n)}">${iconFor(n)} ${esc(n)} (${counts.get(n)})</option>`).join('');
   sel.value = state.cuisine;
+  // Suggestions when changing a food type in Manage, so typos don't create
+  // a new category.
+  const known = new Set([...names, ...Object.keys(ICONS)]);
+  $('cuisineOptions').innerHTML = [...known].sort().map(n => `<option value="${esc(n)}"></option>`).join('');
 }
 
-function renderOrigin() {
+function renderOrigin(note = '') {
   const el = $('origin');
   if (!state.origin) { el.textContent = ''; return; }
   if (state.origin.isUser) {
     el.textContent = 'Sorted by distance from your location.';
   } else {
-    el.innerHTML = `Sorted by distance from ${esc(state.origin.label)}. <button id="useLoc" type="button">Use my location</button>`;
+    el.innerHTML = `Sorted by distance from ${esc(state.origin.label)}. <button id="useLoc" type="button">Use my location</button>` +
+      (note ? ` <span class="origin-note">${esc(note)}</span>` : '');
     $('useLoc').onclick = () => locateUser(true);
   }
 }
 
 function renderList() {
   const items = visible();
+  // A selected restaurant that the search or filter hides is deselected, so
+  // its popup doesn't linger.
+  if (state.selectedId && !items.some(r => r.id === state.selectedId)) { state.selectedId = null; map.info?.close(); }
   const list = $('list');
-  if (!items.length) {
-    list.innerHTML = `<li class="empty">${state.restaurants.length ? 'No restaurants match.' : 'No restaurants yet. Use “Manage” to add Google Maps links.'}</li>`;
-  } else {
-    list.innerHTML = items.map(r => `
-      <li class="card${r.id === state.selectedId ? ' selected' : ''}" data-id="${esc(r.id)}" tabindex="0">
+  keepFocus(list, () => {
+    list.innerHTML = items.length ? items.map(r => {
+      const selected = r.id === state.selectedId;
+      return `
+      <li class="card${selected ? ' selected' : ''}" data-id="${esc(r.id)}">
         <div class="icon" aria-hidden="true">${iconFor(r.cuisine)}</div>
         <div>
-          <p class="name">${esc(r.name)}</p>
-          ${r.rating != null ? `<p class="meta">${ratingHtml(r)}</p>` : ''}
-          <p class="meta">${r.phone ? `📞 <a href="tel:${esc(r.phone.replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : '📞 Phone not available'}</p>
+          <button type="button" class="name card-main" data-act="select" aria-pressed="${selected}">${esc(r.name)}</button>
+          ${ratingHtml(r) ? `<p class="meta">${ratingHtml(r)}</p>` : ''}
+          <p class="meta">${r.phone ? `📞 <a href="tel:${esc(String(r.phone).replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : '📞 Phone not available'}</p>
           <p class="meta">📍 ${r.address ? esc(r.address) : 'Address not available'}</p>
         </div>
         <div class="side">
           <span>${r.km != null ? formatDistance(r.km) : ''}</span>
           <span class="tag">${esc(r.cuisine)}</span>
         </div>
-      </li>`).join('');
-  }
+      </li>`;
+    }).join('') : `<li class="empty">${state.restaurants.length ? 'No restaurants match.' : 'No restaurants yet. Use “Manage” to add Google Maps links.'}</li>`;
+  });
+  const status = items.length === state.restaurants.length ? plural(items.length, 'restaurant') : `${items.length} of ${plural(state.restaurants.length, 'restaurant')} shown`;
+  if ($('listStatus').textContent !== status) $('listStatus').textContent = status;
   // Google's attribution, shown whenever a rating is on screen.
-  $('ratingNote').hidden = !items.some(r => r.rating != null);
+  $('ratingNote').hidden = !items.some(r => ratingHtml(r));
   renderMarkers(items);
 }
 
@@ -125,23 +166,32 @@ function renderAll() { renderFilterOptions(); renderOrigin(); renderList(); rend
 
 function showMapNotice(html) { const n = $('mapNotice'); n.innerHTML = html; n.hidden = false; }
 
+const MAP_LOAD_TIMEOUT_MS = 15000;
+
 function loadMap() {
   const key = state.config.browserKey;
   if (!key) {
     showMapNotice('<div><b>Map not configured.</b><br>Set GOOGLE_MAPS_API_KEY in .env and restart the server.<br>The list on the left still works.</div>');
     return;
   }
+  const failed = () => showMapNotice('<div>Could not load Google Maps. Check your connection, then reload the page.<br>The list on the left still works.</div>');
+  // If the script loads but never starts the map (blocked or empty), say so
+  // instead of leaving a blank area.
+  const timer = setTimeout(() => { if (!map.instance) failed(); }, MAP_LOAD_TIMEOUT_MS);
   window.gm_authFailure = () => showMapNotice(`<div><b>Google rejected the Maps API key.</b><br>
     Check that billing and Maps JavaScript API are enabled, and that the key's Websites restriction includes
     <code>${esc(location.origin)}</code>. The browser console (F12) names the exact error.</div>`);
-  window.__initMap = () => initMap().catch(err => {
-    console.error(err);
-    showMapNotice(`<div><b>The map failed to start.</b><br>${esc(err.message)}</div>`);
-  });
+  window.__initMap = () => {
+    clearTimeout(timer);
+    initMap().catch(err => {
+      console.error(err);
+      showMapNotice(`<div><b>The map failed to start.</b><br>${esc(err.message)}</div>`);
+    });
+  };
   const s = document.createElement('script');
   s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=__initMap`;
   s.async = true;
-  s.onerror = () => showMapNotice('<div>Could not load Google Maps. Check your connection.</div>');
+  s.onerror = () => { clearTimeout(timer); failed(); };
   document.head.appendChild(s);
 }
 
@@ -193,7 +243,7 @@ function makePinOverlay(OverlayView) {
       OverlayView.preventMapHitsAndGesturesFrom?.(this.el);
     }
     draw() {
-      const p = this.getProjection().fromLatLngToDivPixel(this.position);
+      const p = this.getProjection()?.fromLatLngToDivPixel(this.position);
       if (p) { this.el.style.left = `${p.x}px`; this.el.style.top = `${p.y}px`; }
     }
     onRemove() { this.el.remove(); }
@@ -207,31 +257,33 @@ function renderMarkers(items) {
   for (const r of items) {
     let m = map.markers.get(r.id);
     if (!m) {
-      const el = pinElement(r.name);
-      const open = e => { e.stopPropagation(); select(r.id, { fromMap: true }); };
+      const el = pinElement();
+      const open = e => { e.preventDefault(); e.stopPropagation(); select(r.id, { fromMap: true }); };
       el.addEventListener('click', open);
       el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') open(e); });
       m = new map.PinOverlay(new map.api.LatLng(r.lat, r.lng), el);
       map.markers.set(r.id, m);
     }
+    // Details can change after "Update from Google": keep the pin in step.
+    if (m.at !== `${r.lat},${r.lng}`) { m.at = `${r.lat},${r.lng}`; m.position = new map.api.LatLng(r.lat, r.lng); if (m.getMap()) m.draw(); }
+    if (m.el.title !== r.name) { m.el.title = r.name; m.el.setAttribute('aria-label', r.name); }
     if (!m.getMap()) m.setMap(map.instance);
     const selected = r.id === state.selectedId;
     m.el.querySelector('.pin-glyph').textContent = iconFor(r.cuisine);
     m.el.classList.toggle('selected', selected);
+    m.el.setAttribute('aria-pressed', selected);
     m.el.style.zIndex = selected ? 1000 : Math.round(1000 - r.lat * 10); // southern pins in front
   }
 }
 
 // A teardrop pin with the food-type icon in a white circle. CSS shifts it so
 // the tip sits on the restaurant's location.
-function pinElement(name) {
+function pinElement() {
   const el = document.createElement('div');
   el.className = 'pin';
-  el.title = name;
   el.tabIndex = 0;
   el.setAttribute('role', 'button');
-  el.setAttribute('aria-label', name);
-  el.innerHTML = `<svg viewBox="0 0 40 50" aria-hidden="true"><path d="M20 49C20 49 2 30.5 2 19a18 18 0 0 1 36 0C38 30.5 20 49 20 49z"/><circle cx="20" cy="19" r="12.5"/></svg><span class="pin-glyph"></span>`;
+  el.innerHTML = `<svg viewBox="0 0 40 50" aria-hidden="true"><path d="M20 49C20 49 2 30.5 2 19a18 18 0 0 1 36 0C38 30.5 20 49 20 49z"/><circle cx="20" cy="19" r="12.5"/></svg><span class="pin-glyph" aria-hidden="true"></span>`;
   return el;
 }
 
@@ -261,7 +313,7 @@ function select(id, { fromMap = false, toggle = true } = {}) {
   if (fromMap) document.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   if (!map.instance || !r) return;
   map.instance.panTo(latLng(r));
-  map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${r.rating != null ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(r.mapsUrl)}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
+  map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
   map.info.setPosition(latLng(r));
   map.info.open({ map: map.instance });
 }
@@ -274,12 +326,12 @@ function useOffice() {
 }
 
 function locateUser(explicit = false) {
-  if (!('geolocation' in navigator)) return;
+  if (!('geolocation' in navigator)) { if (explicit) renderOrigin('This browser can’t share its location.'); return; }
   navigator.geolocation.getCurrentPosition(pos => {
     state.origin = { lat: pos.coords.latitude, lng: pos.coords.longitude, label: 'your location', isUser: true };
     renderAll();
   }, err => {
-    if (explicit) alert(err.code === 1 ? 'Location permission was denied. Using the office location.' : 'Could not get your location.');
+    if (explicit) renderOrigin(err.code === 1 ? 'Location permission was denied.' : 'Couldn’t get your location.');
   }, { timeout: 10000, maximumAge: 300000 });
 }
 
@@ -294,18 +346,34 @@ function toast(msg) {
   toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
 }
 
+function setStatus(msg, isError = false) {
+  $('editStatus').textContent = msg;
+  $('editStatus').classList.toggle('error', isError);
+}
+// Errors in Manage show in the window; an expired login is handled by api().
+function showError(err) {
+  if (err.handled) return;
+  if (state.manageView === 'add') $('addResults').innerHTML = `<li class="error">✕ ${esc(err.message)}</li>`;
+  else setStatus(err.message, true);
+}
+
+function focusManage() {
+  const target = !state.loggedIn ? $('password') : state.manageView === 'add' ? currentAddInput() : $('editSearch');
+  target.focus();
+}
+
 async function openManage() {
   $('toast').hidden = true;
   $('addResults').innerHTML = '';
-  $('editStatus').textContent = '';
+  setStatus('');
   $('loginError').textContent = '';
   const session = await api('/api/auth/session');
   state.loggedIn = session.loggedIn;
   state.passwordSet = session.passwordSet;
-  if (state.loggedIn) await loadArchived();
+  if (state.loggedIn) await reloadRestaurants();
   renderManage();
   $('manageDialog').showModal();
-  (state.loggedIn ? (state.manageView === 'add' ? currentAddInput() : $('editSearch')) : $('password')).focus();
+  focusManage();
 }
 
 function renderManage() {
@@ -316,14 +384,28 @@ function renderManage() {
   $('loginHint').innerHTML = state.passwordSet
     ? 'Enter the admin password to add, edit or archive restaurants.'
     : 'No admin password is set yet. On the server, run <code>npm run set-password</code> (or <code>nasc-food set-password</code>), then restart it.';
-  document.querySelectorAll('#manageView .tab').forEach(t => {
+  document.querySelectorAll('#manageView [role=tab]').forEach(t => {
     const on = t.dataset.view === state.manageView;
     t.classList.toggle('active', on);
     t.setAttribute('aria-selected', on);
+    t.tabIndex = on ? 0 : -1;
   });
   $('addPane').hidden = state.manageView !== 'add';
-  $('editPane').hidden = state.manageView !== 'edit';
+  $('editPane').hidden = state.manageView !== 'restaurants';
   renderEditList();
+}
+
+// Tabs follow the ARIA tabs pattern: arrow keys, Home and End move between them.
+function onTabKey(e) {
+  const tabs = [...document.querySelectorAll('#manageView [role=tab]')];
+  const i = tabs.indexOf(e.target);
+  const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+  if (next == null) return;
+  e.preventDefault();
+  const tab = tabs[(next + tabs.length) % tabs.length];
+  state.manageView = tab.dataset.view;
+  renderManage();
+  tab.focus();
 }
 
 async function submitLogin(e) {
@@ -334,9 +416,9 @@ async function submitLogin(e) {
     await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ password: $('password').value }) });
     state.loggedIn = true;
     $('password').value = '';
-    await loadArchived();
+    await reloadRestaurants();
     renderManage();
-    currentAddInput().focus();
+    focusManage();
   } catch (err) {
     $('loginError').textContent = err.message;
     $('password').select();
@@ -348,6 +430,8 @@ async function submitLogin(e) {
 async function logout() {
   await api('/api/auth/logout', { method: 'POST' });
   state.loggedIn = false;
+  state.checked.clear();
+  state.archived = [];
   $('manageDialog').close();
   toast('Logged out.');
 }
@@ -360,26 +444,27 @@ function onAddModeChange() {
   currentAddInput().focus();
 }
 
+async function reloadRestaurants() {
+  [state.restaurants, state.archived] = await Promise.all([api('/api/restaurants'), api('/api/restaurants/archived')]);
+  renderAll();
+}
+
 // Adds the pasted link(s) and lists the outcome of each in the window, which
 // stays open for more. Failed links stay in the box to fix or retry.
 async function submitAdd(e) {
   e.preventDefault();
   const input = currentAddInput();
   const out = $('addResults');
-  if (!input.value.trim()) return;
+  if (!input.value.trim() || state.busy) return;
   $('addSubmit').disabled = true;
   out.innerHTML = '<li>Looking up places…</li>';
   try {
     const { results } = await api('/api/restaurants', { method: 'POST', body: JSON.stringify({ text: input.value }) });
-    const added = results.filter(r => r.status === 'added');
+    const changed = results.some(r => r.status === 'added' || r.status === 'restored');
     const failed = results.filter(r => r.status === 'error');
-    const restored = results.filter(r => r.status === 'restored');
-    if (added.length || restored.length) {
-      [state.restaurants] = await Promise.all([api('/api/restaurants'), loadArchived()]);
-      renderAll();
-    }
+    if (changed) await reloadRestaurants();
     // Stay open so more can be added; the result shows here and the map updates behind.
-    const warning = added.find(r => r.warning)?.warning;
+    const warning = results.find(r => r.warning)?.warning;
     out.innerHTML = results.map(r => {
       if (r.status === 'added') return `<li class="added">✓ Added ${esc(r.restaurant.name)}</li>`;
       if (r.status === 'restored') return `<li class="added">✓ Restored from the archive: ${esc(r.restaurant.name)}</li>`;
@@ -389,9 +474,9 @@ async function submitAdd(e) {
     }).join('') + (warning ? `<li class="duplicate">${esc(warning)}</li>` : '');
     input.value = failed.length && addMode() === 'bulk' ? failed.map(r => r.url).join('\n') : failed.length ? input.value : '';
     input.focus();
-    if (added.length || restored.length) fitToVisible();
+    if (changed) fitToVisible();
   } catch (err) {
-    out.innerHTML = `<li class="error">✕ ${esc(err.message)}</li>`;
+    if (!err.handled) out.innerHTML = `<li class="error">✕ ${esc(err.message)}</li>`;
   } finally {
     $('addSubmit').disabled = false;
   }
@@ -405,70 +490,116 @@ function editItems() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-async function loadArchived() {
-  state.archived = await api('/api/restaurants/archived');
-}
+const TOOLS = [
+  ['refresh', 'Update from Google', () => state.editShow === 'listed' && state.config.placesEnabled],
+  ['archive', 'Archive', () => state.editShow === 'listed'],
+  ['restore', 'Restore', () => state.editShow === 'archived'],
+  ['purge', 'Delete forever', () => state.editShow === 'archived'],
+];
 
 function renderEditList() {
-  if (!$('editList')) return;
+  if (!$('editList') || !state.config) return;
   const items = editItems();
   const inArchive = state.editShow === 'archived';
   // Only rows you can see stay ticked, so an action never hits something
   // hidden by the search or the other view.
   const shown = new Set(items.map(r => r.id));
   for (const id of state.checked) if (!shown.has(id)) state.checked.delete(id);
-  const n = state.checked.size;
-  $('editCount').textContent = `(${state.restaurants.length})`;
+  const n = state.checked.size, busy = state.busy;
   $('listedCount').textContent = `(${state.restaurants.length})`;
   $('archivedCount').textContent = `(${state.archived.length})`;
   const tool = t => document.querySelector(`#editPane [data-tool="${t}"]`);
   tool('all').textContent = `Select all (${items.length})`;
-  tool('all').disabled = !items.length || n === items.length;
-  tool('none').disabled = !n;
-  for (const [t, label, show] of [['refresh', 'Update from Google', !inArchive && state.config.placesEnabled], ['archive', 'Archive', !inArchive], ['restore', 'Restore', inArchive], ['purge', 'Delete forever', inArchive]]) {
-    tool(t).hidden = !show;
-    tool(t).disabled = !n;
+  tool('all').disabled = busy || !items.length || n === items.length;
+  tool('none').disabled = busy || !n;
+  for (const [t, label, show] of TOOLS) {
+    tool(t).hidden = !show();
+    tool(t).disabled = busy || !n;
     tool(t).textContent = n ? `${label} (${n})` : label;
   }
   const empty = inArchive ? (state.archived.length ? 'No archived restaurants match.' : 'Nothing archived. Archived restaurants show up here and can be restored.')
     : (state.restaurants.length ? 'No restaurants match.' : 'No restaurants yet.');
-  $('editList').innerHTML = items.length ? items.map(r => `
+  const list = $('editList');
+  keepFocus(list, () => {
+    list.innerHTML = items.length ? items.map(r => `
     <li class="edit-row${state.checked.has(r.id) ? ' checked' : ''}" data-id="${esc(r.id)}">
-      <input type="checkbox" class="check" data-act="check" aria-label="Select ${esc(r.name)}" ${state.checked.has(r.id) ? 'checked' : ''}>
+      <input type="checkbox" class="check" data-act="check" aria-label="Select ${esc(r.name)}" ${state.checked.has(r.id) ? 'checked' : ''} ${busy ? 'disabled' : ''}>
       <span class="icon small" aria-hidden="true">${iconFor(r.cuisine)}</span>
       <div class="edit-main">
         <p class="name">${esc(r.name)}</p>
         <p class="meta">${inArchive ? `Archived ${esc(new Date(r.archivedAt).toLocaleDateString())}` : r.address ? esc(r.address) : 'Address not available'}</p>
       </div>
       <div class="edit-actions">${inArchive ? '' : `
-        <button type="button" class="tag" data-act="cuisine" title="Change food type">${esc(r.cuisine)} ✎</button>
-        ${!r.enriched && state.config.placesEnabled ? '<button type="button" class="tag" data-act="refresh" title="Look up phone and address again">↻ Details</button>' : ''}`}
+        <button type="button" class="tag" data-act="cuisine" aria-label="Food type: ${esc(r.cuisine)}. Change" ${busy ? 'disabled' : ''}>${esc(r.cuisine)} ✎</button>
+        ${!r.enriched && state.config.placesEnabled ? `<button type="button" class="tag" data-act="refresh" title="Look up phone and address again" ${busy ? 'disabled' : ''}>↻ Details</button>` : ''}`}
       </div>
     </li>`).join('') : `<li class="empty">${empty}</li>`;
+  });
 }
 
-async function onEditClick(e) {
+// Runs one Manage action at a time; everything else is disabled meanwhile.
+// Afterwards focus goes back to the control you used, or the nearest one
+// still usable, rather than being lost.
+async function exclusive(fn) {
+  if (state.busy) return;
+  const from = document.activeElement;
+  state.busy = true;
+  renderEditList();
+  try { await fn(); } catch (err) { showError(err); } finally {
+    state.busy = false;
+    renderEditList();
+    const a = document.activeElement;
+    const lost = !a || a === document.body || a === $('manageDialog') || a.disabled;
+    if (lost && $('manageDialog').open && state.loggedIn) {
+      const usable = b => b && b.isConnected && !b.disabled && !b.hidden;
+      (usable(from) ? from : [...document.querySelectorAll('#editPane .list-tools button')].find(usable) || $('editSearch')).focus();
+    }
+  }
+}
+
+// The food type is edited in place, with suggestions from the existing ones.
+function editCuisine(row, r) {
+  const actions = row.querySelector('.edit-actions');
+  actions.innerHTML = `<input class="cuisine-input" list="cuisineOptions" maxlength="40" value="${esc(r.cuisine)}" aria-label="Food type for ${esc(r.name)}">`;
+  const input = actions.querySelector('input');
+  input.select();
+  let done = false;
+  const finish = save => {
+    if (done) return;
+    done = true;
+    const next = input.value.trim();
+    const refocus = () => $('editList').querySelector(`[data-id="${CSS.escape(r.id)}"] [data-act="cuisine"]`)?.focus();
+    if (!save || !next || next === r.cuisine) { renderEditList(); refocus(); return; }
+    exclusive(async () => {
+      Object.assign(r, await api(restaurantUrl(r.id), { method: 'PATCH', body: JSON.stringify({ cuisine: next }) }));
+      renderAll();
+      setStatus(`Changed ${r.name} to ${r.cuisine}.`);
+    }).then(refocus);
+  };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } // don't close the window
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+function onEditClick(e) {
   const tool = e.target.closest('[data-tool]')?.dataset.tool;
   if (tool) return onEditTool(tool);
   const row = e.target.closest('.edit-row');
-  if (!row) return;
+  if (!row || state.busy || e.target.closest('.cuisine-input')) return;
   const id = row.dataset.id;
   const r = editSource().find(x => x.id === id);
+  if (!r) return;
   const act = e.target.closest('[data-act]')?.dataset.act;
-  if (act === 'cuisine') {
-    const next = prompt(`Food type for ${r.name}:`, r.cuisine);
-    if (next && next.trim() && next.trim() !== r.cuisine) {
-      Object.assign(r, await api(`/api/restaurants/${id}`, { method: 'PATCH', body: JSON.stringify({ cuisine: next }) }));
-      renderAll();
-    }
-    return;
-  }
+  if (act === 'cuisine') return editCuisine(row, r);
   if (act === 'refresh') {
-    const { restaurant, warning } = await api(`/api/restaurants/${id}/refresh`, { method: 'POST' });
-    Object.assign(r, restaurant);
-    renderAll();
-    if (warning) alert(warning);
-    return;
+    return exclusive(async () => {
+      const { restaurant, warning } = await api(restaurantUrl(id, '/refresh'), { method: 'POST' });
+      Object.assign(r, restaurant);
+      renderAll();
+      setStatus(warning || `Updated ${r.name} from Google.`, !!warning);
+    });
   }
   // Anywhere else on the row toggles its checkbox.
   if (state.checked.has(id)) state.checked.delete(id); else state.checked.add(id);
@@ -476,43 +607,39 @@ async function onEditClick(e) {
 }
 
 async function onEditTool(tool) {
-  $('editStatus').textContent = '';
-  $('editStatus').classList.remove('error');
-  if (tool === 'all') editItems().forEach(r => state.checked.add(r.id));
-  if (tool === 'none') state.checked.clear();
+  if (state.busy) return;
+  setStatus('');
+  if (tool === 'all') { editItems().forEach(r => state.checked.add(r.id)); return renderEditList(); }
+  if (tool === 'none') { state.checked.clear(); return renderEditList(); }
+  const ids = [...state.checked];
+  if (!ids.length) return;
   if (tool === 'refresh') {
     // One Places lookup each, in turn, to pick up ratings and other changes.
-    const ids = [...state.checked], failed = [];
-    const btn = document.querySelector('#editPane [data-tool="refresh"]');
-    for (const [i, id] of ids.entries()) {
-      btn.textContent = `Updating ${i + 1} of ${ids.length}…`;
-      btn.disabled = true;
-      const r = state.restaurants.find(x => x.id === id);
-      try { Object.assign(r, (await api(`/api/restaurants/${id}/refresh`, { method: 'POST' })).restaurant); }
-      catch (err) { failed.push(`${r.name}: ${err.message}`); }
-    }
-    state.checked.clear();
-    renderAll();
-    const ok = ids.length - failed.length;
-    $('editStatus').textContent = `Updated ${ok} restaurant${ok === 1 ? '' : 's'} from Google.` + (failed.length ? ` Failed: ${failed.join('; ')}` : '');
-    $('editStatus').classList.toggle('error', failed.length > 0);
-    return;
+    return exclusive(async () => {
+      const failed = [];
+      for (const [i, id] of ids.entries()) {
+        if (!state.loggedIn) return; // login expired: api() already said so
+        const r = state.restaurants.find(x => x.id === id);
+        if (!r) continue;
+        setStatus(`Updating ${i + 1} of ${ids.length}: ${r.name}…`);
+        try { Object.assign(r, (await api(restaurantUrl(id, '/refresh'), { method: 'POST' })).restaurant); }
+        catch (err) { if (err.handled) return; failed.push(`${r.name}: ${err.message}`); }
+      }
+      state.checked.clear();
+      renderAll();
+      const ok = ids.length - failed.length;
+      setStatus(`Updated ${plural(ok, 'restaurant')} from Google.` + (failed.length ? ` Failed: ${failed.join('; ')}` : ''), failed.length > 0);
+    });
   }
-  if (tool === 'archive' || tool === 'restore' || tool === 'purge') {
-    const n = state.checked.size, s = n === 1 ? '' : 's';
-    if (tool === 'purge' && !confirm(`Permanently delete ${n} archived restaurant${s}? This can't be undone.`)) return;
-    const ids = [...state.checked];
+  if (tool === 'purge' && !confirm(`Permanently delete ${plural(ids.length, 'archived restaurant')}? This can't be undone.`)) return;
+  return exclusive(async () => {
     const { changed } = await api(`/api/restaurants/${tool}`, { method: 'POST', body: JSON.stringify({ ids }) });
     if (ids.includes(state.selectedId)) { state.selectedId = null; map.info?.close(); }
     state.checked.clear();
-    [state.restaurants] = await Promise.all([api('/api/restaurants'), loadArchived()]);
-    renderAll();
+    await reloadRestaurants();
     const done = { archive: 'Archived', restore: 'Restored', purge: 'Permanently deleted' }[tool];
-    $('editStatus').textContent = `${done} ${changed} restaurant${changed === 1 ? '' : 's'}.` +
-      (tool === 'archive' ? ` Find ${changed === 1 ? 'it' : 'them'} under Archived to restore.` : '');
-    return;
-  }
-  renderEditList();
+    setStatus(`${done} ${plural(changed, 'restaurant')}.` + (tool === 'archive' && changed ? ` Find ${changed === 1 ? 'it' : 'them'} under Archived to restore.` : ''));
+  });
 }
 
 function onListClick(e) {
@@ -525,24 +652,29 @@ function onListClick(e) {
 
 async function init() {
   const dlg = $('manageDialog');
-  $('manageBtn').onclick = () => openManage().catch(err => alert(err.message));
+  $('manageBtn').onclick = () => openManage().catch(err => toast(err.message));
   $('manageClose').onclick = $('manageDone').onclick = () => dlg.close();
-  // Clicking the dimmed backdrop (the dialog element itself) closes it.
-  dlg.addEventListener('click', e => { if (e.target === e.currentTarget) dlg.close(); });
-  $('logoutBtn').onclick = () => logout().catch(err => alert(err.message));
+  // Clicking the dimmed backdrop closes the window; a drag that merely ends
+  // there (e.g. selecting text in a field) doesn't.
+  let downOnBackdrop = false;
+  dlg.addEventListener('mousedown', e => { downOnBackdrop = e.target === dlg; });
+  dlg.addEventListener('click', e => { if (e.target === dlg && downOnBackdrop) dlg.close(); downOnBackdrop = false; });
+  $('logoutBtn').onclick = () => logout().catch(err => toast(err.message));
   $('loginView').onsubmit = submitLogin;
-  document.querySelectorAll('#manageView .tab').forEach(t => t.onclick = () => { state.manageView = t.dataset.view; renderManage(); });
+  document.querySelectorAll('#manageView [role=tab]').forEach(t => {
+    t.onclick = () => { state.manageView = t.dataset.view; renderManage(); };
+    t.onkeydown = onTabKey;
+  });
   document.querySelectorAll('input[name=addMode]').forEach(r => r.onchange = onAddModeChange);
   $('addForm').onsubmit = submitAdd;
   document.querySelectorAll('input[name=editShow]').forEach(r => r.onchange = () => {
-    state.editShow = r.value; state.checked.clear(); $('editStatus').textContent = ''; renderEditList();
+    state.editShow = r.value; state.checked.clear(); setStatus(''); renderEditList();
   });
   $('editSearch').oninput = e => { state.editSearch = e.target.value; renderEditList(); };
-  $('editPane').onclick = e => onEditClick(e).catch(err => alert(err.message));
+  $('editPane').onclick = e => onEditClick(e);
   $('search').oninput = e => { state.search = e.target.value; renderList(); };
   $('cuisineFilter').onchange = e => { state.cuisine = e.target.value; renderList(); fitToVisible(); };
   $('list').onclick = onListClick;
-  $('list').onkeydown = e => { if (e.key === 'Enter' && e.target.classList.contains('card')) select(e.target.dataset.id); };
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !dlg.open) deselect(); });
 
   [state.config, state.restaurants] = await Promise.all([api('/api/config'), api('/api/restaurants')]);

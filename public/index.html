@@ -19,7 +19,8 @@
         <select id="cuisineFilter" aria-label="Filter by food type"><option value="">All food types</option></select>
       </div>
       <p id="origin" class="origin"></p>
-      <ul id="list" class="list" aria-live="polite"></ul>
+      <p id="listStatus" class="visually-hidden" role="status"></p>
+      <ul id="list" class="list" aria-label="Restaurants"></ul>
       <p id="ratingNote" class="rating-note" hidden>Ratings from Google Maps. Google doesn't verify reviews but removes fake ones it finds. <a href="https://support.google.com/contributionpolicy/answer/7422880" target="_blank" rel="noopener">About reviews</a></p>
     </aside>
 
@@ -29,6 +30,7 @@
     </main>
   </div>
   <dialog id="manageDialog" class="add-dialog" aria-labelledby="manageTitle">
+   <div class="dialog-body">
     <header class="dialog-head">
       <h2 id="manageTitle">Manage restaurants</h2>
       <div class="head-actions">
@@ -46,11 +48,11 @@
 
     <div id="manageView" hidden>
       <div class="tabs" role="tablist">
-        <button type="button" role="tab" class="tab active" data-view="add" aria-selected="true">Add</button>
-        <button type="button" role="tab" class="tab" data-view="edit" aria-selected="false">Restaurants <span id="editCount"></span></button>
+        <button type="button" role="tab" class="tab active" id="tabAdd" data-view="add" aria-selected="true" aria-controls="addPane">Add</button>
+        <button type="button" role="tab" class="tab" id="tabRestaurants" data-view="restaurants" aria-selected="false" aria-controls="editPane" tabindex="-1">Restaurants</button>
       </div>
 
-      <section id="addPane">
+      <section id="addPane" role="tabpanel" aria-labelledby="tabAdd">
         <div class="subtabs">
           <label><input type="radio" name="addMode" value="single" checked> One link</label>
           <label><input type="radio" name="addMode" value="bulk"> Bulk paste</label>
@@ -63,7 +65,7 @@
         <ul id="addResults" class="results" aria-live="polite"></ul>
       </section>
 
-      <section id="editPane" hidden>
+      <section id="editPane" role="tabpanel" aria-labelledby="tabRestaurants" hidden>
         <div class="subtabs">
           <label><input type="radio" name="editShow" value="listed" checked> Listed <span id="listedCount"></span></label>
           <label><input type="radio" name="editShow" value="archived"> Archived <span id="archivedCount"></span></label>
@@ -86,8 +88,10 @@
         <button type="button" id="manageDone" class="btn">Done</button>
       </footer>
     </div>
+   </div>
   </dialog>
+  <datalist id="cuisineOptions"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js"></script>
+  <script src="app.js" nonce="__CSP_NONCE__"></script>
 </body>
 </html>

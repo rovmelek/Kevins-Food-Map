@@ -5,7 +5,8 @@
 #   nasc-food logs        follow the server log (Ctrl+C to exit)
 #   nasc-food test        run the automated tests
 #   nasc-food set-password  set the password for the Manage window
-#   nasc-food update      git pull, run tests, restart if they pass
+#   nasc-food update      pull new code (keeps this server's restaurant list),
+#                         run tests, restart if they pass, else roll back
 #   nasc-food uninstall   stop and remove the service
 set -euo pipefail
 
@@ -15,26 +16,44 @@ DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 
 sudo_() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 
+DATA=data/restaurants.json
+
 need_unit() {
   [ -f "$UNIT" ] || { echo "Service not installed. Run: $0 install" >&2; exit 1; }
 }
 
-cmd_install() {
+# systemd unit files can't hold these characters safely in paths.
+check_path() {
+  case "$1" in
+    *[[:space:]\&\|\\%]*) echo "Can't install from '$1': move the app to a path without spaces or & | \\ % characters." >&2; exit 1 ;;
+  esac
+}
+
+render_unit() {
   local node user
   node="$(command -v node || true)"
-  [ -n "$node" ] || { echo "node not found on PATH. Install Node.js 18.17+ first." >&2; exit 1; }
+  [ -n "$node" ] || { echo "node not found on PATH. Install Node.js 22+ first." >&2; exit 1; }
   node="$(readlink -f "$node")"
   user="${SUDO_USER:-$(id -un)}"
-  [ -f "$DIR/.env" ] || echo "Warning: $DIR/.env not found; copy .env.example to .env and add your key." >&2
-  mkdir -p "$DIR/data"
-  [ -f "$DIR/data/restaurants.json" ] || echo '[]' > "$DIR/data/restaurants.json"
+  check_path "$DIR"; check_path "$node"
+  if [ "$user" = root ]; then
+    echo "Warning: the service will run as root. Safer: create a user (sudo adduser nascfood), put the app in its home, and run install as that user with sudo." >&2
+  fi
   sed -e "s|@USER@|$user|g" -e "s|@DIR@|$DIR|g" -e "s|@NODE@|$node|g" \
     "$DIR/deploy/nasc-food.service.in" | sudo_ tee "$UNIT" > /dev/null
   sudo_ systemctl daemon-reload
+  echo "Service runs as $user from $DIR with $node."
+}
+
+cmd_install() {
+  [ -f "$DIR/.env" ] || echo "Warning: $DIR/.env not found; copy .env.example to .env and add your key." >&2
+  [ ! -f "$DIR/.env" ] || chmod 600 "$DIR/.env"
+  mkdir -p "$DIR/data"
+  [ -f "$DIR/$DATA" ] || echo '[]' > "$DIR/$DATA"
+  render_unit
   sudo_ systemctl enable "$SERVICE"
   sudo_ ln -sf "$DIR/bin/nasc-food" /usr/local/bin/nasc-food
-  echo "Installed. Runs as $user from $DIR with $node."
-  echo "Start it with: nasc-food start"
+  echo "Installed. Start it with: nasc-food start"
 }
 
 cmd_uninstall() {
@@ -46,10 +65,36 @@ cmd_uninstall() {
   echo "Removed. Your data in $DIR/data is untouched."
 }
 
+# This server's restaurant list is the live one: it is set aside before
+# pulling and put back afterwards, so a pull never fails on it or replaces it.
+# (Changes to the list in GitHub are not applied; daily backups are in
+# data/backups/.) If the tests fail, the code goes back to what it was.
 cmd_update() {
-  git -C "$DIR" pull --ff-only
-  (cd "$DIR" && npm test)
-  if [ -f "$UNIT" ]; then sudo_ systemctl restart "$SERVICE"; echo "Updated and restarted."; fi
+  local old live
+  old="$(git -C "$DIR" rev-parse HEAD)"
+  live="$(mktemp)"
+  cp "$DIR/$DATA" "$live"
+  git -C "$DIR" checkout -- "$DATA"
+  local upstream_changed=0
+  if ! git -C "$DIR" pull --ff-only; then
+    cp "$live" "$DIR/$DATA"; rm -f "$live"
+    echo "git pull failed; nothing changed." >&2; exit 1
+  fi
+  git -C "$DIR" diff --quiet "$old" HEAD -- "$DATA" || upstream_changed=1
+  cp "$live" "$DIR/$DATA"; rm -f "$live"
+  [ "$upstream_changed" = 0 ] || echo "Note: $DATA changed in GitHub; this server kept its own list." >&2
+  if ! (cd "$DIR" && npm test); then
+    live="$(mktemp)"; cp "$DIR/$DATA" "$live"; git -C "$DIR" checkout -- "$DATA"
+    git -C "$DIR" reset --keep "$old"
+    cp "$live" "$DIR/$DATA"; rm -f "$live"
+    echo "Tests failed, so the code was rolled back to $(git -C "$DIR" rev-parse --short HEAD). The service was not restarted." >&2
+    exit 1
+  fi
+  if [ -f "$UNIT" ]; then
+    render_unit
+    sudo_ systemctl restart "$SERVICE"
+    echo "Updated to $(git -C "$DIR" rev-parse --short HEAD) and restarted."
+  fi
 }
 
 case "${1:-}" in
@@ -61,5 +106,5 @@ case "${1:-}" in
   test)      cd "$DIR" && npm test ;;
   set-password) cd "$DIR" && node scripts/set-password.js && { [ -f "$UNIT" ] && echo "Then: nasc-food restart" || true; } ;;
   update)    cmd_update ;;
-  *) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

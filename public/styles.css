@@ -1,6 +1,8 @@
 :root {
+  color-scheme: light dark;
   --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #5d6677; --border: #e2e5ea;
-  --accent: #d9480f; --accent-ink: #fff; --hover: #fff4ec; --error: #c92a2a; --ok: #2b8a3e;
+  /* Text colors meet WCAG AA (4.5:1) on --panel in both themes. */
+  --accent: #c2410c; --accent-ink: #fff; --hover: #fff4ec; --error: #c92a2a; --error-ink: #fff; --ok: #237032;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -15,10 +17,11 @@ body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; 
 h1 { font-size: 20px; margin: 0; }
 .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-.btn:disabled { opacity: .6; cursor: progress; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
 
-.add-dialog { width: min(520px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+.add-dialog { width: min(520px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,.35); }
 .add-dialog::backdrop { background: rgba(0,0,0,.45); }
+.dialog-body { padding: 16px; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .dialog-head h2 { margin: 0; font-size: 17px; }
 .icon-btn { border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
@@ -39,18 +42,21 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .origin { margin: 4px 16px 6px; color: var(--muted); font-size: 12px; }
 .origin button { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
 
-.list-tools { display: flex; align-items: center; gap: 12px; margin: 10px 0 8px; min-height: 28px; font-size: 13px; }
+.list-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 0 8px; min-height: 28px; font-size: 13px; }
 .list-tools .spacer { flex: 1; }
 .link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
 .link-btn:disabled { color: var(--muted); cursor: default; }
 .btn.small { padding: 4px 10px; font-size: 12px; }
-.btn.danger { background: var(--error); border-color: var(--error); color: #fff; font-weight: 600; }
+.btn.danger { background: var(--error); border-color: var(--error); color: var(--error-ink); font-weight: 600; }
 .check { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--error); cursor: pointer; }
 .list { list-style: none; margin: 0; padding: 0 16px 16px; overflow-y: auto; flex: 1; }
 .card { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: var(--panel); }
 .card:hover, .card.selected { background: var(--hover); border-color: var(--accent); }
 .icon { width: 34px; height: 34px; border-radius: 50%; background: var(--bg); display: grid; place-items: center; font-size: 18px; }
 .name { font-weight: 600; margin: 0 0 2px; }
+/* The card's name is its button: keyboard users Tab to it and press Enter/Space. */
+.card-main { display: block; border: 0; background: none; padding: 0; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.card-main:focus-visible, .pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .meta { color: var(--muted); font-size: 12px; margin: 1px 0; }
 .meta a { color: inherit; }
 .side { text-align: right; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
@@ -63,7 +69,7 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .info h3 { margin: 0 0 4px; font-size: 14px; } .info p { margin: 2px 0; font-size: 12px; color: #4a5263; }
 .info a { color: #1a73e8; }
 .pin { position: absolute; width: 40px; height: 50px; transform: translate(-50%, -100%); transform-origin: 50% 100%; cursor: pointer; transition: transform .12s; }
-.pin:hover, .pin:focus-visible { transform: translate(-50%, -100%) scale(1.15); outline: none; }
+.pin:hover, .pin:focus-visible { transform: translate(-50%, -100%) scale(1.15); }
 .pin svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 3px 3px rgba(0,0,0,.4)); }
 .pin path { fill: #e8590c; stroke: #fff; stroke-width: 2.5; }
 .pin circle { fill: #fff; }
@@ -78,7 +84,8 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
   .list { overflow: visible; }
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #15181e; --panel: #1d2129; --text: #e7e9ee; --muted: #9aa3b2; --border: #2e3440; --hover: #2a2420; }
+  :root { --bg: #15181e; --panel: #1d2129; --text: #e7e9ee; --muted: #9aa3b2; --border: #2e3440; --hover: #2a2420;
+    --accent: #ff8a4c; --accent-ink: #1d2330; --error: #ff6b6b; --error-ink: #1d2330; --ok: #51cf66; }
 }
 
 /* Manage window */
@@ -112,3 +119,10 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .stars::before { content: '★★★★★'; position: absolute; inset: 0; width: var(--pct); overflow: hidden; color: #f5a623; white-space: nowrap; }
 .rating-note { margin: 0; padding: 8px 16px 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); }
 .rating-note a { color: inherit; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.cuisine-input { width: 9em; padding: 2px 8px; font-size: 12px; border-radius: 999px; }
+.origin-note { color: var(--error); }
+@media (max-width: 480px) {
+  .edit-row { grid-template-columns: 16px 26px 1fr; }
+  .edit-actions { grid-column: 3; }
+}

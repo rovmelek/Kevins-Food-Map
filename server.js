@@ -8,6 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { findLinks } = require('./lib/parse');
 const { resolveLink } = require('./lib/resolve');
+const { createStore } = require('./lib/store');
 const auth = require('./lib/auth');
 
 // Only when started as the app, so tests aren't affected by a local .env.
@@ -21,11 +22,15 @@ const MAP_ID = process.env.GOOGLE_MAPS_MAP_ID || '';
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'restaurants.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BULK = 100;
+const MAX_BODY = 200000;
 const PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || '';
 // Behind a reverse proxy (Caddy, nginx) set TRUST_PROXY=1 so the login
 // lockout counts the visitor's address, not the proxy's.
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 const COOKIE = 'nasc_session';
+// Password checks are deliberately slow and memory-hungry; only this many run
+// at once, so a flood of logins can't stall or exhaust the server.
+const MAX_CONCURRENT_LOGINS = 2;
 
 const officeLat = parseFloat(process.env.OFFICE_LAT), officeLng = parseFloat(process.env.OFFICE_LNG);
 const officeSet = Math.abs(officeLat) <= 90 && Math.abs(officeLng) <= 180;
@@ -34,41 +39,24 @@ const OFFICE = officeSet
   // Default when .env has no office: center of ZIP 98683, Vancouver WA (zippopotam.us).
   : { name: 'NASC area (ZIP 98683)', lat: 45.6032, lng: -122.5133, placeholder: true };
 
+// KEY=value lines; `export KEY=...`, quotes and trailing # comments allowed.
+// Variables already set in the environment win.
 function loadDotEnv(file) {
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
     if (!m || m[1] in process.env) continue;
-    const quoted = m[2].match(/^(['"])(.*)\1$/);
-    process.env[m[1]] = quoted ? quoted[2] : m[2].replace(/\s+#.*$/, '');
+    const quoted = m[2].match(/^(['"])(.*?)\1(\s+#.*)?$/);
+    process.env[m[1]] = quoted ? quoted[2] : m[2].replace(/(^|\s+)#.*$/, '');
   }
 }
 
-// ---- storage ---------------------------------------------------------------
+// ---- restaurants -------------------------------------------------------------
 
-let restaurants = [];
-let writeChain = Promise.resolve();
-
-function loadStore() {
-  try { restaurants = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
-  catch (e) { if (e.code !== 'ENOENT') throw e; restaurants = []; }
-}
-
-// Writes are queued and atomic (temp file + rename) so concurrent adds
-// can't interleave or leave a half-written file.
-function saveStore() {
-  const snapshot = JSON.stringify(restaurants, null, 2);
-  writeChain = writeChain.then(async () => {
-    await fs.promises.mkdir(path.dirname(DATA_FILE), { recursive: true });
-    const tmp = `${DATA_FILE}.${process.pid}.tmp`;
-    await fs.promises.writeFile(tmp, snapshot);
-    await fs.promises.rename(tmp, DATA_FILE);
-  });
-  return writeChain;
-}
+const store = createStore(DATA_FILE);
 
 function findDuplicate(rec) {
-  return restaurants.find(r =>
+  return store.items.find(r =>
     (rec.placeId && r.placeId === rec.placeId) ||
     (rec.cid && r.cid === rec.cid) ||
     (r.name.toLowerCase() === rec.name.toLowerCase() &&
@@ -77,11 +65,11 @@ function findDuplicate(rec) {
 
 // Archived restaurants stay in the file (with archivedAt) so they can be
 // restored; only the Manage window sees them.
-const active = () => restaurants.filter(r => !r.archivedAt);
-const archived = () => restaurants.filter(r => r.archivedAt);
+const active = () => store.items.filter(r => !r.archivedAt);
+const archived = () => store.items.filter(r => r.archivedAt);
 
 async function addFromLink(url) {
-  const existingBySource = restaurants.find(r => r.sourceUrl === url);
+  const existingBySource = store.items.find(r => r.sourceUrl === url);
   if (existingBySource) return restoreIfArchived(url, existingBySource);
   try {
     const rec = await resolveLink(url, { apiKey: SERVER_KEY });
@@ -89,8 +77,9 @@ async function addFromLink(url) {
     if (dup) return restoreIfArchived(url, dup);
     const { warning, ...stored } = rec;
     const restaurant = { id: crypto.randomUUID(), ...stored, cuisineManual: false, addedAt: new Date().toISOString() };
-    restaurants.push(restaurant);
-    await saveStore();
+    store.items.push(restaurant);
+    try { await store.save(); }
+    catch (e) { store.items = store.items.filter(r => r !== restaurant); throw e; }
     return { url, status: 'added', restaurant, warning };
   } catch (e) {
     return { url, status: 'error', error: e.message };
@@ -100,51 +89,89 @@ async function addFromLink(url) {
 // Adding something that was archived brings it back instead of duplicating it.
 async function restoreIfArchived(url, r) {
   if (!r.archivedAt) return { url, status: 'duplicate', restaurant: r };
+  const was = r.archivedAt;
   delete r.archivedAt;
-  await saveStore();
+  try { await store.save(); }
+  catch (e) { r.archivedAt = was; return { url, status: 'error', error: e.message }; }
   return { url, status: 'restored', restaurant: r };
 }
 
+const badRequest = msg => Object.assign(new Error(msg), { status: 400 });
+
 function readIds(body) {
-  if (!Array.isArray(body.ids) || !body.ids.every(id => typeof id === 'string')) {
-    throw Object.assign(new Error('ids must be a list of restaurant ids'), { status: 400 });
-  }
+  if (!Array.isArray(body.ids) || !body.ids.every(id => typeof id === 'string')) throw badRequest('ids must be a list of restaurant ids');
   return new Set(body.ids);
 }
 
-// ---- http ------------------------------------------------------------------
+// ---- http helpers ------------------------------------------------------------
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+};
+
+// Content Security Policy for the page, following Google's "strict CSP" for
+// the Maps JavaScript API: only scripts carrying this response's nonce (and
+// what they load) may run.
+function pageCsp(nonce) {
+  return [
+    `script-src 'nonce-${nonce}' 'strict-dynamic' https: 'unsafe-eval' blob:`,
+    "img-src 'self' https://*.googleapis.com https://*.gstatic.com *.google.com *.googleusercontent.com data:",
+    'frame-src *.google.com',
+    "connect-src 'self' https://*.googleapis.com *.google.com https://*.gstatic.com data: blob:",
+    'font-src https://fonts.gstatic.com',
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    'worker-src blob:',
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
+
 function send(res, status, body, type = 'application/json; charset=utf-8', headers = {}) {
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers });
+  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...SECURITY_HEADERS, ...headers });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
 
-function readJson(req, limit = 200000) {
+// Reads a JSON object body. Anything else (a list, null, bad JSON, too big)
+// is a 400/413, never a crash.
+function readJson(req) {
   return new Promise((resolve, reject) => {
-    let size = 0; const chunks = [];
+    let size = 0, tooBig = false; const chunks = [];
     req.on('data', c => {
+      if (tooBig) return;
       size += c.length;
-      if (size > limit) { reject(Object.assign(new Error('Request too large'), { status: 413 })); req.destroy(); return; }
+      if (size > MAX_BODY) { tooBig = true; reject(Object.assign(new Error('Request too large'), { status: 413, close: true })); return; }
       chunks.push(c);
     });
     req.on('end', () => {
-      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); }
-      catch { reject(Object.assign(new Error('Invalid JSON'), { status: 400 })); }
+      if (tooBig) return;
+      let body;
+      try { body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}; }
+      catch { return reject(badRequest('Invalid JSON')); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return reject(badRequest('Send a JSON object'));
+      resolve(body);
     });
     req.on('error', reject);
   });
 }
 
+// The visitor's address. Behind a trusted proxy, the last X-Forwarded-For
+// entry is the one the proxy itself added; earlier ones come from the client
+// and can be forged.
 function clientIp(req) {
-  if (TRUST_PROXY && req.headers['x-forwarded-for']) return req.headers['x-forwarded-for'].split(',')[0].trim();
+  const xff = TRUST_PROXY && req.headers['x-forwarded-for'];
+  if (xff) return xff.split(',').pop().trim();
   return req.socket.remoteAddress;
 }
 
 function sessionCookie(req, token, maxAgeSec) {
   // Secure when the browser reached us over HTTPS (directly or via the proxy).
-  const https = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+  const https = req.socket.encrypted || (TRUST_PROXY && req.headers['x-forwarded-proto'] === 'https');
   return `${COOKIE}=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSec}${https ? '; Secure' : ''}`;
 }
 
@@ -152,158 +179,202 @@ function isLoggedIn(req) {
   return auth.isValidSession(auth.parseCookies(req.headers.cookie)[COOKIE]);
 }
 
-async function handleAuth(req, res, action) {
-  if (action === 'session' && req.method === 'GET') {
-    return send(res, 200, { passwordSet: !!PASSWORD_HASH, loggedIn: isLoggedIn(req) });
-  }
-  if (action === 'login' && req.method === 'POST') {
-    if (!PASSWORD_HASH) return send(res, 503, { error: 'No admin password is set. On the server run: nasc-food set-password (or npm run set-password), then restart.' });
-    const ip = clientIp(req);
-    const wait = auth.lockedFor(ip);
-    if (wait) return send(res, 429, { error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60000)} min.` }, undefined, { 'Retry-After': String(Math.ceil(wait / 1000)) });
-    const { password } = await readJson(req);
-    let ok = false;
-    try { ok = typeof password === 'string' && !!password && await auth.verifyPassword(password, PASSWORD_HASH); }
-    catch (e) { return send(res, 500, { error: e.message }); } // e.g. Argon2id hash on Node < 24
-    if (!ok) {
-      auth.recordFailure(ip);
-      return send(res, 401, { error: 'Wrong password.' });
-    }
-    auth.clearFailures(ip);
-    const token = auth.createSession();
-    return send(res, 200, { loggedIn: true }, undefined, { 'Set-Cookie': sessionCookie(req, token, auth.SESSION_MS / 1000) });
-  }
-  if (action === 'logout' && req.method === 'POST') {
-    auth.endSession(auth.parseCookies(req.headers.cookie)[COOKIE]);
-    return send(res, 200, { loggedIn: false }, undefined, { 'Set-Cookie': sessionCookie(req, '', 0) });
-  }
-  return send(res, 404, { error: 'Not found' });
+// ---- API handlers ------------------------------------------------------------
+
+let loginsRunning = 0;
+
+async function login(req, res) {
+  if (!PASSWORD_HASH) return send(res, 503, { error: 'No admin password is set. On the server run: nasc-food set-password (or npm run set-password), then restart.' });
+  const ip = clientIp(req);
+  const wait = auth.lockedFor(ip);
+  if (wait) return send(res, 429, { error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60000)} min.` }, undefined, { 'Retry-After': String(Math.ceil(wait / 1000)) });
+  const { password } = await readJson(req);
+  if (typeof password !== 'string' || !password) throw badRequest('Enter the password.');
+  if (loginsRunning >= MAX_CONCURRENT_LOGINS) return send(res, 429, { error: 'Busy, try again in a moment.' }, undefined, { 'Retry-After': '2' });
+  // Count the attempt before the slow check, so parallel guesses can't all
+  // slip in before the lockout; a correct password clears it.
+  auth.recordFailure(ip);
+  loginsRunning++;
+  let ok;
+  try { ok = await auth.verifyPassword(password, PASSWORD_HASH); }
+  finally { loginsRunning--; }
+  if (!ok) return send(res, 401, { error: 'Wrong password.' });
+  auth.clearFailures(ip);
+  const token = auth.createSession();
+  return send(res, 200, { loggedIn: true }, undefined, { 'Set-Cookie': sessionCookie(req, token, auth.SESSION_MS / 1000) });
 }
 
+function logout(req, res) {
+  auth.endSession(auth.parseCookies(req.headers.cookie)[COOKIE]);
+  return send(res, 200, { loggedIn: false }, undefined, { 'Set-Cookie': sessionCookie(req, '', 0) });
+}
+
+async function addRestaurants(req, res) {
+  const body = await readJson(req);
+  const { maps: links, other } = findLinks(typeof (body.text ?? body.url) === 'string' ? body.text ?? body.url : '');
+  if (!links.length) {
+    throw badRequest(other.length
+      ? "That isn't a Google Maps link. In Google Maps, open the restaurant, tap Share and copy the link (https://maps.app.goo.gl/...)."
+      : 'No Google Maps links found. Links look like https://maps.app.goo.gl/...');
+  }
+  if (links.length > MAX_BULK) throw badRequest(`Too many links at once (max ${MAX_BULK}).`);
+  const results = [];
+  for (const link of links) results.push(await addFromLink(link)); // sequential: gentle on Google
+  for (const link of other) results.push({ url: link, status: 'skipped', error: 'Not a Google Maps link' });
+  return send(res, 200, { results });
+}
+
+// Archive, restore, or permanently delete several at once: { ids: [...] }.
+// Purge only removes restaurants that are already archived.
+async function bulkChange(req, res, { action }) {
+  const ids = readIds(await readJson(req));
+  const before = store.items;
+  let changed = 0;
+  if (action === 'purge') {
+    store.items = before.filter(r => !(ids.has(r.id) && r.archivedAt));
+    changed = before.length - store.items.length;
+  } else {
+    const now = new Date().toISOString();
+    store.items = before.map(r => {
+      if (!ids.has(r.id) || !!r.archivedAt === (action === 'archive')) return r;
+      changed++;
+      if (action === 'archive') return { ...r, archivedAt: now };
+      const { archivedAt, ...rest } = r;
+      return rest;
+    });
+  }
+  if (changed) {
+    try { await store.save(); } catch (e) { store.items = before; throw e; }
+  }
+  return send(res, 200, { changed });
+}
+
+function findRestaurant(id) {
+  const r = store.items.find(x => x.id === id);
+  if (!r) throw Object.assign(new Error('Restaurant not found'), { status: 404 });
+  return r;
+}
+
+// Replace one restaurant with an updated copy, undoing it if saving fails.
+async function replaceRestaurant(r, next) {
+  store.items = store.items.map(x => (x === r ? next : x));
+  try { await store.save(); }
+  catch (e) { store.items = store.items.map(x => (x === next ? r : x)); throw e; }
+  return next;
+}
+
+// Look the place up again, e.g. after a Places key was added, or for a fresh
+// rating. Choices made by hand (food type, phone, address) are kept.
+async function refreshRestaurant(req, res, { id }) {
+  const { warning, ...data } = await resolveLink(findRestaurant(id).sourceUrl, { apiKey: SERVER_KEY });
+  const r = findRestaurant(id); // again: it may have changed during the lookup
+  if (r.cuisineManual) delete data.cuisine;
+  if (r.phoneManual) delete data.phone;
+  if (r.addressManual) delete data.address;
+  return send(res, 200, { restaurant: await replaceRestaurant(r, { ...r, ...data }), warning });
+}
+
+async function editRestaurant(req, res, { id }) {
+  const body = await readJson(req);
+  const r = findRestaurant(id);
+  const next = { ...r };
+  if (typeof body.cuisine === 'string' && body.cuisine.trim()) Object.assign(next, { cuisine: body.cuisine.trim().slice(0, 40), cuisineManual: true });
+  if (typeof body.phone === 'string') Object.assign(next, { phone: body.phone.trim().slice(0, 40) || null, phoneManual: true });
+  if (typeof body.address === 'string') Object.assign(next, { address: body.address.trim().slice(0, 200) || null, addressManual: true });
+  return send(res, 200, await replaceRestaurant(r, next));
+}
+
+async function archiveRestaurant(req, res, { id }) { // a real delete is /purge
+  const r = findRestaurant(id);
+  return send(res, 200, r.archivedAt ? r : await replaceRestaurant(r, { ...r, archivedAt: new Date().toISOString() }));
+}
+
+// [method, path pattern, handler, needs login]
+const ID = '(?<id>[A-Za-z0-9-]{1,64})';
+const ROUTES = [
+  ['GET', '/api/config', (req, res) => send(res, 200, { browserKey: BROWSER_KEY, mapId: MAP_ID, office: OFFICE, placesEnabled: !!SERVER_KEY }), false],
+  ['GET', '/api/auth/session', (req, res) => send(res, 200, { passwordSet: !!PASSWORD_HASH, loggedIn: isLoggedIn(req) }), false],
+  ['POST', '/api/auth/login', login, false],
+  ['POST', '/api/auth/logout', logout, false],
+  ['GET', '/api/restaurants', (req, res) => send(res, 200, active()), false],
+  ['POST', '/api/restaurants', addRestaurants, true],
+  ['GET', '/api/restaurants/archived', (req, res) => send(res, 200, archived()), true],
+  ['POST', '/api/restaurants/(?<action>archive|restore|purge)', bulkChange, true],
+  ['POST', `/api/restaurants/${ID}/refresh`, refreshRestaurant, true],
+  ['PATCH', `/api/restaurants/${ID}`, editRestaurant, true],
+  ['DELETE', `/api/restaurants/${ID}`, archiveRestaurant, true],
+].map(([method, pattern, handler, needsLogin]) => ({ method, re: new RegExp(`^${pattern}$`), handler, needsLogin }));
+
 async function handleApi(req, res, url) {
-  const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
+  const matches = ROUTES.map(r => ({ r, m: url.pathname.match(r.re) })).filter(x => x.m);
+  if (!matches.length) return send(res, 404, { error: 'Not found' });
+  const hit = matches.find(x => x.r.method === req.method);
+  if (!hit) return send(res, 405, { error: 'Method not allowed' }, undefined, { Allow: [...new Set(matches.map(x => x.r.method))].join(', ') });
   // Every change must be JSON. Browsers can't send that cross-site without
   // permission, which (with the SameSite cookie) blocks forged requests.
   if (req.method !== 'GET' && !String(req.headers['content-type'] || '').startsWith('application/json')) {
     return send(res, 415, { error: 'Send JSON' });
   }
-  if (req.method === 'GET' && parts[1] === 'config') {
-    return send(res, 200, { browserKey: BROWSER_KEY, mapId: MAP_ID, office: OFFICE, placesEnabled: !!SERVER_KEY });
-  }
-  if (parts[1] === 'auth') return handleAuth(req, res, parts[2]);
-  if (parts[1] !== 'restaurants') return send(res, 404, { error: 'Not found' });
-
-  if (parts.length === 2 && req.method === 'GET') return send(res, 200, active());
-
-  // Everything below changes the list: only for a logged-in admin.
-  if (!isLoggedIn(req)) return send(res, 401, { error: 'Log in to manage restaurants.' });
-
-  if (parts.length === 2 && req.method === 'POST') {
-    const body = await readJson(req);
-    const { maps: links, other } = findLinks(body.text ?? body.url ?? '');
-    if (!links.length) {
-      return send(res, 400, { error: other.length
-        ? "That isn't a Google Maps link. In Google Maps, open the restaurant, tap Share and copy the link (https://maps.app.goo.gl/...)."
-        : 'No Google Maps links found. Links look like https://maps.app.goo.gl/...' });
-    }
-    if (links.length > MAX_BULK) return send(res, 400, { error: `Too many links at once (max ${MAX_BULK}).` });
-    const results = [];
-    for (const link of links) results.push(await addFromLink(link)); // sequential: gentle on Google
-    for (const link of other) results.push({ url: link, status: 'skipped', error: 'Not a Google Maps link' });
-    return send(res, 200, { results });
-  }
-
-  if (parts.length === 3 && parts[2] === 'archived' && req.method === 'GET') return send(res, 200, archived());
-
-  // Archive, restore, or permanently delete several at once: POST
-  // /api/restaurants/{archive|restore|purge} { ids: [...] }. Purge only
-  // removes restaurants that are already archived.
-  if (parts.length === 3 && ['archive', 'restore', 'purge'].includes(parts[2]) && req.method === 'POST') {
-    const ids = readIds(await readJson(req));
-    const now = new Date().toISOString();
-    let changed = 0;
-    if (parts[2] === 'purge') {
-      const before = restaurants.length;
-      restaurants = restaurants.filter(r => !(ids.has(r.id) && r.archivedAt));
-      changed = before - restaurants.length;
-    } else {
-      for (const r of restaurants) {
-        if (!ids.has(r.id) || !!r.archivedAt === (parts[2] === 'archive')) continue;
-        if (parts[2] === 'archive') r.archivedAt = now; else delete r.archivedAt;
-        changed++;
-      }
-    }
-    if (changed) await saveStore();
-    return send(res, 200, { changed });
-  }
-
-  const idx = restaurants.findIndex(r => r.id === parts[2]);
-  if (idx === -1) return send(res, 404, { error: 'Restaurant not found' });
-
-  // Re-run the lookup, e.g. after a Places key was added or fixed.
-  if (parts.length === 4 && parts[3] === 'refresh' && req.method === 'POST') {
-    const r = restaurants[idx];
-    const fresh = await resolveLink(r.sourceUrl, { apiKey: SERVER_KEY });
-    const { warning, ...data } = fresh;
-    if (r.cuisineManual) delete data.cuisine;
-    Object.assign(r, data);
-    await saveStore();
-    return send(res, 200, { restaurant: r, warning });
-  }
-  if (parts.length !== 3) return send(res, 404, { error: 'Not found' });
-
-  if (req.method === 'PATCH') {
-    const body = await readJson(req);
-    const r = restaurants[idx];
-    if (typeof body.cuisine === 'string' && body.cuisine.trim()) {
-      r.cuisine = body.cuisine.trim().slice(0, 40);
-      r.cuisineManual = true;
-    }
-    if (typeof body.phone === 'string') r.phone = body.phone.trim().slice(0, 40) || null;
-    if (typeof body.address === 'string') r.address = body.address.trim().slice(0, 200) || null;
-    await saveStore();
-    return send(res, 200, r);
-  }
-  if (req.method === 'DELETE') { // archives; see /purge for a real delete
-    const r = restaurants[idx];
-    if (!r.archivedAt) { r.archivedAt = new Date().toISOString(); await saveStore(); }
-    return send(res, 200, r);
-  }
-  return send(res, 405, { error: 'Method not allowed' });
+  if (hit.r.needsLogin && !isLoggedIn(req)) return send(res, 401, { error: 'Log in to manage restaurants.' });
+  return hit.r.handler(req, res, hit.m.groups || {});
 }
 
+// ---- static files ------------------------------------------------------------
+
 function serveStatic(req, res, url) {
-  let rel = decodeURIComponent(url.pathname);
+  let rel;
+  try { rel = decodeURIComponent(url.pathname); } catch { return send(res, 400, 'Bad request', 'text/plain'); }
+  if (rel.includes('\0')) return send(res, 400, 'Bad request', 'text/plain');
   if (rel === '/') rel = '/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep)) return send(res, 403, 'Forbidden', 'text/plain');
   fs.readFile(file, (err, buf) => {
     if (err) return send(res, 404, 'Not found', 'text/plain');
+    if (path.extname(file) === '.html') {
+      const nonce = crypto.randomBytes(16).toString('base64');
+      return send(res, 200, buf.toString('utf8').replaceAll('__CSP_NONCE__', nonce), MIME['.html'], { 'Content-Security-Policy': pageCsp(nonce) });
+    }
     send(res, 200, buf, MIME[path.extname(file)] || 'application/octet-stream');
   });
 }
 
+// ---- server ------------------------------------------------------------------
+
+async function handle(req, res) {
+  let url;
+  try { url = new URL(req.url, 'http://localhost'); } catch { return send(res, 400, { error: 'Bad request' }); }
+  if (url.pathname === '/healthz' && req.method === 'GET') {
+    return send(res, store.lastError ? 503 : 200, { ok: !store.lastError, restaurants: store.items.length });
+  }
+  if (url.pathname.startsWith('/api/')) {
+    const started = Date.now();
+    res.on('finish', () => console.log(`${clientIp(req)} ${req.method} ${url.pathname} ${res.statusCode} ${Date.now() - started}ms`));
+    return handleApi(req, res, url);
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed', 'text/plain', { Allow: 'GET, HEAD' });
+  return serveStatic(req, res, url);
+}
+
 function createServer() {
-  return http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    try {
-      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
-      if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed', 'text/plain');
-      serveStatic(req, res, url);
-    } catch (e) {
-      send(res, e.status || 500, { error: e.message || 'Server error' });
-    }
+  return http.createServer((req, res) => {
+    handle(req, res).catch(e => {
+      // Expected errors carry a status and a message meant for the user;
+      // anything else is a bug: log it, and don't leak details.
+      if (!e.status) console.error(e);
+      if (res.headersSent) return res.destroy();
+      send(res, e.status || 500, { error: e.status ? e.message : 'Server error' }, undefined, e.close ? { Connection: 'close' } : {});
+    });
   });
 }
 
 if (require.main === module) {
-  loadStore();
+  store.load();
   const server = createServer();
   // On stop/restart, finish pending saves before exiting.
   for (const sig of ['SIGTERM', 'SIGINT']) {
     process.once(sig, () => {
       server.close();
-      writeChain.finally(() => process.exit(0));
+      store.flush().finally(() => process.exit(0));
       setTimeout(() => process.exit(0), 5000).unref();
     });
   }
@@ -312,10 +383,11 @@ if (require.main === module) {
     console.log(`NASC Food running at http://${shown}:${PORT}`);
     if (!BROWSER_KEY) console.warn('  ! No GOOGLE_MAPS_API_KEY: the map will not load (list still works).');
     if (!SERVER_KEY) console.warn('  ! No Places key: added restaurants will have name and pin only, no phone/address.');
-    if (PASSWORD_HASH.startsWith('argon2id$') && auth.algorithm !== 'argon2id') console.warn('  ! ADMIN_PASSWORD_HASH uses Argon2id, which needs Node.js 24+. Upgrade Node or run set-password again.');
+    if (BROWSER_KEY && BROWSER_KEY === SERVER_KEY && TRUST_PROXY) console.warn('  ! One key is used for the map and for Places. Visitors can see it, so anyone could run Places lookups on your bill: set daily quotas, or split it into two keys (README, "Google setup").');
+    if (PASSWORD_HASH.startsWith('argon2id$') && auth.algorithm !== 'argon2id') console.warn('  ! ADMIN_PASSWORD_HASH uses Argon2id, which needs Node.js 24.7+. Upgrade Node or run set-password again.');
     if (!PASSWORD_HASH) console.warn('  ! No ADMIN_PASSWORD_HASH: Manage is locked. Run: npm run set-password');
     if (OFFICE.placeholder) console.warn('  ! OFFICE_LAT/OFFICE_LNG missing or invalid: using the ZIP 98683 default location.');
   });
 }
 
-module.exports = { createServer, loadStore };
+module.exports = { createServer, loadStore: () => store.load(), loadDotEnv };

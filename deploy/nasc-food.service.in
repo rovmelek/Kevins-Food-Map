@@ -14,16 +14,32 @@ Type=simple
 User=@USER@
 WorkingDirectory=@DIR@
 ExecStart=@NODE@ @DIR@/server.js
-Environment=NODE_ENV=production
 # Restart automatically after a crash (limits are in [Unit] above).
 Restart=always
 RestartSec=2
-# Basic hardening: the app may only write to its data folder.
+# Hardening: the app may only write to its data folder (and backups in it),
+# and gets no extra privileges, devices or kernel access. Files it creates are
+# private to its user. (MemoryDenyWriteExecute is left off: Node's JIT needs it.)
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=@DIR@/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
