@@ -65,8 +65,13 @@ cmd_install() {
   [ ! -f "$DIR/.env" ] || chmod 600 "$DIR/.env"
   mkdir -p "$DIR/data"
   [ -f "$DIR/$DATA" ] || echo '[]' > "$DIR/$DATA"
-  # Reinstalling keeps the user the service already runs as.
-  render_unit "$(unit_value User)"
+  # Reinstalling the same folder without sudo keeps the user the service runs
+  # as; otherwise it's whoever runs install (the sudo user, if any).
+  local before user=""
+  before="$(unit_value User)"
+  if [ -z "${SUDO_USER:-}" ] && [ "$(unit_value WorkingDirectory)" = "$DIR" ]; then user="$before"; fi
+  render_unit "$user"
+  [ -z "$before" ] || [ "$before" = "$(unit_value User)" ] || echo "The service user changed from $before to $(unit_value User)."
   sudo_ systemctl enable "$SERVICE"
   sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
   echo "Installed. Start it with: kevins-food-map start"
@@ -77,9 +82,8 @@ cmd_install() {
 # one disk, where a move is a single rename that either happens or doesn't;
 # everything that could fail is checked before the service is stopped.
 cmd_move() {
-  local dest="${1:-}" parent
   # Globals, not locals: the exit trap may run after this function returns.
-  user="" node="" state="" moved=0 switched=0 old="$DIR"
+  dest="${1:-}" parent="" user="" node="" state="" switched=0 old="$DIR"
   [ -n "$dest" ] || { echo "Usage: kevins-food-map move /new/folder" >&2; exit 1; }
   need_unit
   [ "$(unit_value WorkingDirectory)" = "$DIR" ] || { echo "Run move from the copy the service uses (see the note above)." >&2; exit 1; }
@@ -91,52 +95,65 @@ cmd_move() {
   case "$dest/" in /tmp/*|/var/tmp/*) echo "The service can't see /tmp or /var/tmp. Pick another place." >&2; exit 1 ;; esac
   check_path "$dest"
   [ ! -f "$DIR/$KEEP" ] || { echo "$KEEP exists: an update was interrupted. Sort that out first (see: kevins-food-map update)." >&2; exit 1; }
-  [ -w "$parent" ] || { echo "You can't write to $parent. Run the move with sudo, or pick a folder you own." >&2; exit 1; }
-  if [ "$(stat -c %d "$DIR")" != "$(stat -c %d "$parent")" ]; then
-    echo "$parent is on another disk, so the folder can't be moved in one step. Copy it yourself:" >&2
-    echo "  sudo systemctl stop $SERVICE && cp -a $DIR $dest && $dest/bin/kevins-food-map install && kevins-food-map start" >&2
-    echo "then delete $DIR once the app works." >&2
-    exit 1
-  fi
+  for d in "$parent" "$(dirname "$DIR")" "$DIR"; do
+    [ -w "$d" ] || { echo "You can't write to $d. Run the move with sudo, or pick a folder you own." >&2; exit 1; }
+  done
+  [ "$(stat -c %d "$DIR")" = "$(stat -c %d "$parent")" ] || { other_disk; exit 1; }
   user="$(unit_value User)"
   node="$(unit_value ExecStart)"; node="${node%% *}" # same Node as now
+  case "$node" in /*/node) ;; *) echo "Unexpected ExecStart in $UNIT. Run: kevins-food-map install, then move again." >&2; exit 1 ;; esac
   [ -x "$node" ] || { echo "The service's Node ($node) is missing. Reinstall Node, or run: kevins-food-map install" >&2; exit 1; }
   if [ -n "$user" ] && [ "$user" != "$(id -un)" ] && ! as_user "$user" test -x "$parent"; then
     echo "The service user ($user) can't open $parent. Pick a folder it can reach." >&2; exit 1
   fi
 
-  state="$(systemctl is-active "$SERVICE" || true)"
-  sudo_ systemctl stop "$SERVICE"
   # From here, an error or Ctrl+C puts the folder back and restarts the service.
   trap 'move_cleanup' EXIT
   trap 'exit 130' INT TERM HUP
-  mv -T -- "$DIR" "$dest"
-  moved=1 DIR="$dest"
+  state="$(systemctl is-active "$SERVICE" || true)"
+  sudo_ systemctl stop "$SERVICE"
+  # A plain rename: it either happens or doesn't, and never falls back to
+  # copying (which mv does across mounts, and can leave two half folders).
+  rename_dir "$DIR" "$dest" || { [ $? != 2 ] || other_disk_hint=1; exit 1; }
+  DIR="$dest"
   render_unit "$user" "$node"
   sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
   switched=1
   echo "Moved to $DIR."
   case "$state" in active|activating|reloading)
-    sudo_ systemctl start "$SERVICE"
-    sleep 2
-    if systemctl is-active --quiet "$SERVICE"; then echo "The service is running again."
-    else echo "The service didn't stay up. See: kevins-food-map logs" >&2; fi ;;
+    if sudo_ systemctl start "$SERVICE" && sleep 2 && systemctl is-active --quiet "$SERVICE"; then
+      echo "The service is running again."
+    else
+      echo "The service didn't start. See: kevins-food-map logs" >&2
+    fi ;;
   esac
+}
+# Exits 2 if the two places are on different disks or mounts.
+rename_dir() {
+  "$node" -e 'try { require("fs").renameSync(process.argv[1], process.argv[2]) }
+    catch (e) { console.error(`Could not move the folder: ${e.message}`); process.exit(e.code === "EXDEV" ? 2 : 1) }' "$1" "$2"
+}
+other_disk() {
+  echo "$parent is on another disk, so the folder can't be moved in one step. Copy it yourself:" >&2
+  echo "  sudo systemctl stop $SERVICE && cp -a $DIR $dest && $dest/bin/kevins-food-map install && kevins-food-map start" >&2
+  echo "then delete $DIR once the app works." >&2
 }
 move_cleanup() {
   trap '' INT TERM HUP
   set +e
   [ "$switched" = 0 ] || return 0
-  if [ "$moved" = 1 ]; then
-    if mv -T -- "$DIR" "$old"; then
-      DIR="$old"; render_unit "$user" "$node" > /dev/null; sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
+  # Decided by what's on disk, not a flag: Ctrl+C can land right after the rename.
+  if [ -e "$dest" ] && [ ! -e "$old" ]; then
+    if rename_dir "$dest" "$old"; then
+      DIR="$old"; render_unit "$user" "$node" > /dev/null 2>&1; sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
       echo "Move stopped; the folder is back in $old." >&2
     else
-      echo "Move stopped halfway: the folder is in $DIR but the service points at $old. Fix with: $DIR/bin/kevins-food-map install" >&2
+      echo "Move stopped halfway: the folder is in $dest but the service points at $old. Fix with: $dest/bin/kevins-food-map install" >&2
       return 0
     fi
   else
     echo "Move stopped; nothing was moved." >&2
+    [ -z "${other_disk_hint:-}" ] || other_disk
   fi
   case "$state" in active|activating|reloading) sudo_ systemctl start "$SERVICE" ;; esac
 }
