@@ -98,7 +98,7 @@ render_unit() {
   fi
   check_path "$DIR"; check_path "$node"
   if [ "$(id -u "$user")" = 0 ]; then
-    echo "Warning: the service will run as root. Safer: create a user (sudo adduser foodmap), put the app in its home, and run: bin/kevins-food-map install --user foodmap" >&2
+    echo "Warning: the service will run as root. Safer: create a user (sudo adduser --system --group foodmap), put the app under /srv, and run: bin/kevins-food-map install --user foodmap (see README, Service user)" >&2
   fi
   # Written to a temp file and renamed, so an interruption can't leave half a unit.
   sed -e "s|@USER@|$user|g" -e "s|@DIR@|$DIR|g" -e "s|@NODE@|$node|g" \
