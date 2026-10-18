@@ -230,30 +230,36 @@ async function addRestaurants(req, res) {
 
 // Archive, restore, or permanently delete several at once: { ids: [...] }.
 // Purge only removes restaurants that are already archived.
+function withArchivedAt(r, archivedAt) {
+  const { archivedAt: _, ...rest } = r;
+  return archivedAt ? { ...rest, archivedAt } : rest;
+}
+
 async function bulkChange(req, res, { action }) {
   const ids = readIds(await readJson(req));
-  // Remember exactly what this request changed, so a failed save undoes only
-  // that, not changes other requests made meanwhile.
-  const undo = new Map(); // new object -> old object
-  let removed = [];
+  // Remember exactly what this request changed, by id, so a failed save undoes
+  // only that, not changes other requests made meanwhile (even to the same
+  // restaurant's other fields).
+  const undo = new Map(); // id -> archivedAt before (undefined: not archived)
+  let removed = []; // [index, restaurant], for purge
   if (action === 'purge') {
-    removed = store.items.filter(r => ids.has(r.id) && r.archivedAt);
-    store.items = store.items.filter(r => !removed.includes(r));
+    removed = store.items.map((r, i) => [i, r]).filter(([, r]) => ids.has(r.id) && r.archivedAt);
+    const gone = new Set(removed.map(([, r]) => r));
+    store.items = store.items.filter(r => !gone.has(r));
   } else {
     const now = new Date().toISOString();
     store.items = store.items.map(r => {
       if (!ids.has(r.id) || !!r.archivedAt === (action === 'archive')) return r;
-      let next;
-      if (action === 'archive') next = { ...r, archivedAt: now };
-      else { const { archivedAt, ...rest } = r; next = rest; }
-      undo.set(next, r);
-      return next;
+      undo.set(r.id, r.archivedAt);
+      return withArchivedAt(r, action === 'archive' ? now : undefined);
     });
   }
   const changed = removed.length + undo.size;
   if (changed) {
     try { await store.save(); } catch (e) {
-      store.items = [...store.items.map(x => undo.get(x) ?? x), ...removed];
+      const items = store.items.map(x => (undo.has(x.id) ? withArchivedAt(x, undo.get(x.id)) : x));
+      for (const [i, r] of removed) items.splice(Math.min(i, items.length), 0, r);
+      store.items = items;
       throw e;
     }
   }

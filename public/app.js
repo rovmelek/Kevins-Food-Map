@@ -178,9 +178,12 @@ function loadMap() {
   // If the script loads but never starts the map (blocked or empty), say so
   // instead of leaving a blank area.
   const timer = setTimeout(() => { if (!map.instance) failed(); }, MAP_LOAD_TIMEOUT_MS);
-  window.gm_authFailure = () => showMapNotice(`<div><b>Google rejected the Maps API key.</b><br>
+  window.gm_authFailure = () => {
+    map.keyRejected = true;
+    showMapNotice(`<div><b>Google rejected the Maps API key.</b><br>
     Check that billing and Maps JavaScript API are enabled, and that the key's Websites restriction includes
     <code>${esc(location.origin)}</code>. The browser console (F12) names the exact error.</div>`);
+  };
   window.__initMap = () => {
     clearTimeout(timer);
     initMap().catch(err => {
@@ -215,7 +218,7 @@ async function initMap() {
     ...(state.config.mapId ? { mapId: state.config.mapId } : { styles: QUIET_STYLE }),
     clickableIcons: false, mapTypeControl: false, streetViewControl: false,
   });
-  $('mapNotice').hidden = true; // a slow load may have shown the timeout notice
+  if (!map.keyRejected) $('mapNotice').hidden = true; // a slow load may have shown the timeout notice
   if (!state.config.mapId) {
     let detailed = false;
     map.instance.addListener('zoom_changed', () => {
@@ -261,7 +264,7 @@ function renderMarkers(items) {
       const el = pinElement();
       const open = e => { e.preventDefault(); e.stopPropagation(); select(r.id, { fromMap: true }); };
       el.addEventListener('click', open);
-      el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') open(e); });
+      el.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) open(e); });
       m = new map.PinOverlay(new map.api.LatLng(r.lat, r.lng), el);
       map.markers.set(r.id, m);
     }
@@ -500,6 +503,10 @@ const TOOLS = [
 
 function renderEditList() {
   if (!$('editList') || !state.config) return;
+  // Rebuilding would destroy an open food-type editor (and its blur would save
+  // a half-typed value), so wait until it closes.
+  if ($('editList').querySelector('.cuisine-input')) { state.editListStale = true; return; }
+  state.editListStale = false;
   const items = editItems();
   const inArchive = state.editShow === 'archived';
   // Only rows you can see stay ticked, so an action never hits something
@@ -559,6 +566,25 @@ async function exclusive(fn) {
   }
 }
 
+// Only the parts that show the food type are redrawn, so an editor open on
+// another row (and the click that opened it) isn't disturbed.
+function cuisineChanged(r) {
+  renderFilterOptions();
+  renderList();
+  patchEditRow(r);
+}
+function patchEditRow(r) {
+  const row = $('editList').querySelector(`.edit-row[data-id="${CSS.escape(r.id)}"]`);
+  if (!row) return;
+  row.querySelector('.icon').textContent = iconFor(r.cuisine);
+  const actions = row.querySelector('.edit-actions');
+  if (!actions.querySelector('.cuisine-input') && state.editShow !== 'archived') {
+    const focused = actions.contains(document.activeElement) ? document.activeElement.dataset.act : null;
+    actions.innerHTML = editActions(r, state.busy);
+    if (focused) actions.querySelector(`[data-act="${focused}"]`)?.focus();
+  }
+}
+
 // The food type is edited in place, with suggestions from the existing ones.
 // The new value shows at once and the save runs in the background, so the
 // rest of the window stays usable (a click that ended the edit still lands).
@@ -566,6 +592,7 @@ function editCuisine(row, r) {
   const actions = row.querySelector('.edit-actions');
   actions.innerHTML = `<input class="cuisine-input" data-act="cuisine" list="cuisineOptions" maxlength="40" value="${esc(r.cuisine)}" aria-label="Food type for ${esc(r.name)}">`;
   const input = actions.querySelector('input');
+  input.focus();
   input.select();
   let done = false;
   const finish = save => {
@@ -577,17 +604,21 @@ function editCuisine(row, r) {
     const hadFocus = document.activeElement === input;
     actions.innerHTML = editActions(r, state.busy);
     if (hadFocus) actions.querySelector('[data-act="cuisine"]')?.focus();
+    if (state.editListStale) renderEditList(); // something changed while editing
+    else patchEditRow(r);
     if (r.cuisine === old) return;
     api(restaurantUrl(r.id), { method: 'PATCH', body: JSON.stringify({ cuisine: next }) }).then(updated => {
       // The list may have been reloaded meanwhile; update whichever copy is shown.
       Object.assign(state.restaurants.find(x => x.id === r.id) || r, updated);
       Object.assign(r, updated);
-      renderAll();
-      setStatus(`Changed ${r.name} to ${r.cuisine}.`);
+      cuisineChanged(r);
+      if (!state.busy) setStatus(`Changed ${r.name} to ${r.cuisine}.`); // don't hide another action's result
     }, err => {
+      if (r.cuisine !== next) return; // a later edit of this row has taken over
       r.cuisine = old;
-      renderAll();
-      showError(err);
+      cuisineChanged(r);
+      if (err.handled) setStatus(`${r.name}: the food type change wasn't saved. Log in and try again.`);
+      else showError(err);
     });
   };
   input.addEventListener('keydown', e => {

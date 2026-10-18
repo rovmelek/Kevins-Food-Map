@@ -77,9 +77,28 @@ cmd_uninstall() {
 KEEP="$DATA.keep"
 
 set_aside() {
-  mv -f "$DIR/$DATA" "$DIR/$KEEP"
+  # (If it's already set aside, the copy in $DATA is git's, not the live one.)
+  [ -f "$DIR/$KEEP" ] || mv -f "$DIR/$DATA" "$DIR/$KEEP"
   # Make the working copy match git so the pull or reset can't trip over it.
   if git -C "$DIR" ls-files --error-unmatch "$DATA" > /dev/null 2>&1; then git -C "$DIR" checkout -- "$DATA"; fi
+}
+roll_back() {
+  set_aside
+  if git -C "$DIR" reset --keep "$old"; then
+    echo "The code was rolled back to $(git -C "$DIR" rev-parse --short HEAD)." >&2
+  else
+    echo "Couldn't roll the code back to $old (see above); the service stays stopped. Fix it, then: nasc-food start" >&2
+    running=0
+  fi
+}
+on_exit() {
+  trap '' INT TERM HUP # finish cleaning up even if Ctrl+C is pressed again
+  set +e
+  if [ "$pulled" = 1 ] && [ "$tested" = 0 ]; then roll_back; fi
+  put_back
+  if [ "$running" = 1 ] && ! sudo_ systemctl start "$SERVICE"; then
+    echo "The service is stopped and couldn't be started. Run: nasc-food start" >&2
+  fi
 }
 put_back() {
   [ -f "$DIR/$KEEP" ] || return 0
@@ -93,30 +112,30 @@ cmd_update() {
     echo "$KEEP exists: an earlier update was interrupted. It holds the live list; check it and move it over $DATA, then try again." >&2; exit 1
   fi
   # Globals, not locals: the exit trap runs after this function has returned.
-  old="" running=0 user="" upstream_changed=0
+  old="" running=0 user="" upstream_changed=0 pulled=0 tested=0
   old="$(git -C "$DIR" rev-parse HEAD)"
+  # Whatever happens from here (error, Ctrl+C), go back to the old code if the
+  # new code hasn't passed its tests, put the list back, and start the service
+  # again if it was running.
+  trap 'on_exit' EXIT
+  trap 'exit 130' INT TERM HUP
   if [ -f "$UNIT" ]; then
     user="$(sed -n 's/^User=//p' "$UNIT")"
     if systemctl is-active --quiet "$SERVICE"; then running=1; sudo_ systemctl stop "$SERVICE"; fi
   fi
-  # Whatever happens from here (error, Ctrl+C), put the list back and start
-  # the service again if it was running.
-  trap 'put_back; if [ "$running" = 1 ]; then sudo_ systemctl start "$SERVICE" || true; fi' EXIT
-  trap 'exit 130' INT TERM
 
   set_aside
   git -C "$DIR" pull --ff-only || { echo "git pull failed; nothing changed." >&2; exit 1; }
+  pulled=1
   git -C "$DIR" diff --quiet "$old" HEAD -- "$DATA" || upstream_changed=1
   put_back
   [ "$upstream_changed" = 0 ] || echo "Note: $DATA changed in GitHub; this server kept its own list." >&2
 
   if ! (cd "$DIR" && npm test); then
-    set_aside
-    git -C "$DIR" reset --keep "$old"
-    put_back
-    echo "Tests failed, so the code was rolled back to $(git -C "$DIR" rev-parse --short HEAD)." >&2
-    exit 1
+    echo "Tests failed." >&2
+    exit 1 # the exit trap rolls back
   fi
+  tested=1
   if [ -f "$UNIT" ]; then
     render_unit "$user"
     sudo_ systemctl restart "$SERVICE"

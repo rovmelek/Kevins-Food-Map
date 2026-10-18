@@ -36,7 +36,7 @@ nasc-food start
 | `nasc-food logs` | follow the log (Ctrl+C to exit) |
 | `nasc-food set-password` | set or change the Manage password (then `restart`) |
 | `nasc-food test` | run the automated tests |
-| `nasc-food update` | pull new code, run the tests, restart if they pass; if they fail, go back to the previous code |
+| `nasc-food update` | pull new code, run the tests, restart if they pass; if they fail or you press Ctrl+C, go back to the previous code |
 | `nasc-food uninstall` | remove the service (keeps your data) |
 
 The server only listens on `127.0.0.1:3000`. To reach it from the internet, put a web server with HTTPS in front of it; location sharing in browsers only works over HTTPS. With [Caddy](https://caddyserver.com/), which gets certificates automatically, the whole config is:
@@ -47,7 +47,7 @@ food.example.com {
 }
 ```
 
-Behind a proxy like this, add `TRUST_PROXY=1` to `.env` so the login lockout sees visitors' real addresses. (The server uses the last `X-Forwarded-For` address, the one your proxy adds, so a visitor can't fake it.) Before going public, set daily quotas on the key, and read the key notes under "Google setup".
+Behind a proxy like this (keep the default `HOST=127.0.0.1` so nobody can reach the app around the proxy), add `TRUST_PROXY=1` to `.env` so the login lockout sees visitors' real addresses. (The server uses the last `X-Forwarded-For` address, the one your proxy adds, so a visitor can't fake it.) Before going public, set daily quotas on the key, and read the key notes under "Google setup".
 
 Install as a normal user with sudo, not as root, so the service doesn't run as root. Install from a path without spaces.
 

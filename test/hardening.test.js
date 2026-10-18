@@ -244,9 +244,13 @@ test('a failed bulk archive undoes only its own change', async () => {
     const archive = fetch(base + '/api/restaurants/archive', { method: 'POST', headers, body: JSON.stringify({ ids: [a.id] }) });
     await new Promise(r => setTimeout(r, 30));
     const charlie = add('Charlie');
+    // An edit of the same restaurant meanwhile replaces its record; the undo must still find it.
+    const edit = fetch(base + '/api/restaurants/' + a.id, { method: 'PATCH', headers, body: JSON.stringify({ cuisine: 'Tapas' }) });
     assert.strictEqual((await archive).status, 500);
+    assert.strictEqual((await edit).status, 200);
     assert.strictEqual((await charlie).results[0].status, 'added');
     assert.deepStrictEqual(await list(), ['Alpha', 'Bravo', 'Charlie'], 'Alpha back, Charlie kept');
+    assert.strictEqual((await (await fetch(base + '/api/restaurants')).json()).find(r => r.id === a.id).cuisine, 'Tapas', 'the edit kept');
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(dataFile, 'utf8')).map(r => r.name).sort(), ['Alpha', 'Bravo', 'Charlie']);
   } finally { fs.promises.writeFile = origWrite; console.error = origError; srv.close(); }
 });
