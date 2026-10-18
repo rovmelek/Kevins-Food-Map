@@ -27,6 +27,7 @@ On a Linux server with systemd (e.g. Ubuntu), install it as a service so it star
 git clone https://github.com/rovmelek/Kevins-Food-Map.git && cd Kevins-Food-Map
 cp .env.example .env && chmod 600 .env   # add your key and office location
 bin/kevins-food-map install     # asks for sudo; adds the `kevins-food-map` command
+                                # (runs as you; to use another user: install --user NAME)
 kevins-food-map set-password
 kevins-food-map start
 ```
@@ -39,7 +40,7 @@ kevins-food-map start
 | `kevins-food-map set-password` | set or change the Manage password (then `restart`) |
 | `kevins-food-map test` | run the automated tests |
 | `kevins-food-map update` | pull new code, run the tests, restart if they pass; if they fail or you press Ctrl+C, go back to the previous code |
-| `kevins-food-map move /new/folder` | move the app folder (code, `.env`, restaurant list, backups) and point the service and command there |
+| `kevins-food-map move /new/folder` | move the app folder (code, `.env`, restaurant list, backups) and point the service and command there; same disk only (it prints copy steps otherwise), and the service user must be able to reach the new place |
 | `kevins-food-map uninstall` | remove the service (keeps your data) |
 
 The server only listens on `127.0.0.1:3000`. To reach it from the internet, put a web server with HTTPS in front of it; location sharing in browsers only works over HTTPS. With [Caddy](https://caddyserver.com/), which gets certificates automatically, the whole config is:
