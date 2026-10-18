@@ -7,7 +7,7 @@ const state = {
   config: null,
   origin: null,        // { lat, lng, label, isUser }
   search: '',
-  cuisine: '',
+  cuisines: new Set(), // food types picked in the filter; empty shows all
   selectedId: null,
   loggedIn: false,
   passwordSet: false,
@@ -97,7 +97,7 @@ function visible() {
   const q = state.search.trim().toLowerCase();
   return state.restaurants
     .filter(r => !q || r.name.toLowerCase().includes(q))
-    .filter(r => !state.cuisine || r.cuisine === state.cuisine)
+    .filter(r => !state.cuisines.size || state.cuisines.has(r.cuisine))
     .map(r => ({ ...r, km: state.origin ? distanceKm(state.origin, r) : null }))
     .sort((a, b) => (a.km ?? 0) - (b.km ?? 0) || a.name.localeCompare(b.name));
 }
@@ -105,18 +105,54 @@ function visible() {
 // ---- rendering -------------------------------------------------------------
 
 function renderFilterOptions() {
-  const sel = $('cuisineFilter');
   const counts = new Map();
   for (const r of state.restaurants) counts.set(r.cuisine, (counts.get(r.cuisine) || 0) + 1);
   const names = [...counts.keys()].sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b));
-  if (state.cuisine && !counts.has(state.cuisine)) state.cuisine = '';
-  sel.innerHTML = `<option value="">All food types (${state.restaurants.length})</option>` +
-    names.map(n => `<option value="${esc(n)}">${iconFor(n)} ${esc(n)} (${counts.get(n)})</option>`).join('');
-  sel.value = state.cuisine;
+  for (const c of state.cuisines) if (!counts.has(c)) state.cuisines.delete(c);
+  const chip = n => `<button type="button" class="chip" data-cuisine="${esc(n)}" aria-pressed="${state.cuisines.has(n)}">${iconFor(n)} ${esc(n)}<span class="n">${counts.get(n)}</span></button>`;
+  keepChipFocus($('filterChips'), () => { $('filterChips').innerHTML = names.map(chip).join(''); });
+  renderActiveFilters();
   // Suggestions when changing a food type in Manage, so typos don't create
   // a new category.
   const known = new Set([...names, ...Object.keys(ICONS)]);
   $('cuisineOptions').innerHTML = [...known].sort().map(n => `<option value="${esc(n)}"></option>`).join('');
+}
+
+// The filter button shows how many types are picked; the picked ones also
+// show under the search box, each with a ✕ to remove it.
+function renderActiveFilters() {
+  const n = state.cuisines.size;
+  $('filterBadge').hidden = !n;
+  $('filterBadge').textContent = n;
+  $('filterBtn').classList.toggle('active', n > 0);
+  $('filterBtn').setAttribute('aria-label', n ? `Filter by food type, ${n} selected` : 'Filter by food type');
+  $('filterClear').disabled = !n;
+  const box = $('activeFilters');
+  box.hidden = !n;
+  keepChipFocus(box, () => {
+    box.innerHTML = [...state.cuisines].sort().map(c => `<button type="button" class="chip" data-cuisine="${esc(c)}" aria-label="Remove filter ${esc(c)}">${iconFor(c)} ${esc(c)} ✕</button>`).join('');
+  });
+  if (!n && box.contains(document.activeElement)) $('filterBtn').focus();
+}
+
+function keepChipFocus(root, render) {
+  const a = document.activeElement;
+  const c = a && root.contains(a) ? a.dataset.cuisine : null;
+  render();
+  if (c != null) [...root.querySelectorAll('[data-cuisine]')].find(b => b.dataset.cuisine === c)?.focus();
+}
+
+function setFilter(change) {
+  change();
+  renderFilterOptions();
+  renderList();
+  fitToVisible();
+}
+
+function toggleFilterPanel(open = $('filterPanel').hidden) {
+  $('filterPanel').hidden = !open;
+  $('filterBtn').setAttribute('aria-expanded', open);
+  if (open) $('filterChips').querySelector('.chip')?.focus();
 }
 
 function renderOrigin(note = '') {
@@ -742,7 +778,26 @@ async function init() {
   $('editSearch').oninput = e => { state.editSearch = e.target.value; renderEditList(); };
   $('editPane').onclick = e => onEditClick(e);
   $('search').oninput = e => { state.search = e.target.value; renderList(); };
-  $('cuisineFilter').onchange = e => { state.cuisine = e.target.value; renderList(); fitToVisible(); };
+  $('filterBtn').onclick = () => toggleFilterPanel();
+  $('filterChips').onclick = e => {
+    const c = e.target.closest('[data-cuisine]')?.dataset.cuisine;
+    if (c != null) setFilter(() => (state.cuisines.has(c) ? state.cuisines.delete(c) : state.cuisines.add(c)));
+  };
+  $('activeFilters').onclick = e => {
+    const c = e.target.closest('[data-cuisine]')?.dataset.cuisine;
+    if (c != null) setFilter(() => state.cuisines.delete(c));
+  };
+  $('filterClear').onclick = () => { setFilter(() => state.cuisines.clear()); $('filterChips').querySelector('.chip')?.focus(); };
+  // Escape or a click elsewhere closes the panel.
+  $('filterPanel').addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); toggleFilterPanel(false); $('filterBtn').focus(); }
+  });
+  document.addEventListener('pointerdown', e => {
+    if (!$('filterPanel').hidden && !e.target.closest('#filterPanel, #filterBtn')) toggleFilterPanel(false);
+  });
+  document.addEventListener('focusin', e => {
+    if (!$('filterPanel').hidden && !e.target.closest('#filterPanel, #filterBtn')) toggleFilterPanel(false);
+  });
   $('list').onclick = onListClick;
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !dlg.open) deselect(); });
 

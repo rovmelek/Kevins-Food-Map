@@ -37,8 +37,21 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .results li { padding: 2px 0; word-break: break-all; }
 .results .added { color: var(--ok); } .results .duplicate { color: var(--muted); } .results .error { color: var(--error); }
 
-.controls { display: flex; gap: 6px; padding: 4px 16px; }
-.controls input { flex: 3; } .controls select { flex: 2; }
+.controls { display: flex; gap: 6px; padding: 4px 16px; position: relative; }
+.controls input { flex: 1; min-width: 0; }
+.filter-btn { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.filter-btn[aria-expanded="true"], .filter-btn.active { border-color: var(--accent); color: var(--accent); }
+.badge { background: var(--accent); color: var(--accent-ink); border-radius: 999px; min-width: 18px; padding: 0 5px; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.filter-panel { position: absolute; top: calc(100% + 4px); left: 16px; right: 16px; z-index: 20; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 10px 12px 12px; max-height: 60vh; overflow: auto; }
+.filter-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.chip:hover { border-color: var(--accent); }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.chip .n { opacity: .75; margin-left: 2px; }
+.chip:focus-visible, .filter-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.active-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 16px 0; }
+.active-filters .chip { font-size: 12px; padding: 2px 8px; }
 .origin { margin: 4px 16px 6px; color: var(--muted); font-size: 12px; }
 .origin button { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
 

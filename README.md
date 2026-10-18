@@ -1,6 +1,6 @@
 # NASC Food
 
-Restaurants on a Google Map. Left panel: search by name, filter by food type, and cards sorted by distance. Right panel: the map, showing whatever the filter shows. Adding, editing and archiving happen in the password-protected **Manage** window.
+Restaurants on a Google Map. Left panel: search by name, a **Filter** button to pick one or more food types, and cards sorted by distance. Right panel: the map, showing whatever the filter shows. Adding, editing and archiving happen in the password-protected **Manage** window.
 
 ## Run it
 

@@ -16,8 +16,19 @@
 
       <div class="controls">
         <input id="search" type="search" placeholder="Search by name" aria-label="Search by name">
-        <select id="cuisineFilter" aria-label="Filter by food type"><option value="">All food types</option></select>
+        <button type="button" id="filterBtn" class="btn filter-btn" aria-expanded="false" aria-controls="filterPanel">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span>Filter</span><span id="filterBadge" class="badge" hidden></span>
+        </button>
+        <div id="filterPanel" class="filter-panel" role="group" aria-labelledby="filterTitle" hidden>
+          <div class="filter-head">
+            <span id="filterTitle">Food types</span>
+            <button type="button" id="filterClear" class="link-btn">Clear</button>
+          </div>
+          <div id="filterChips" class="chips"></div>
+        </div>
       </div>
+      <div id="activeFilters" class="active-filters" hidden></div>
       <p id="origin" class="origin"></p>
       <p id="listStatus" class="visually-hidden" role="status"></p>
       <ul id="list" class="list" aria-label="Restaurants"></ul>
