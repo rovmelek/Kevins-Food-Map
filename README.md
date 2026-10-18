@@ -27,7 +27,7 @@ On a Linux server with systemd (e.g. Ubuntu), install it as a service so it star
 git clone https://github.com/rovmelek/Kevins-Food-Map.git && cd Kevins-Food-Map
 cp .env.example .env && chmod 600 .env   # add your key and office location
 bin/kevins-food-map install     # asks for sudo; adds the `kevins-food-map` command
-                                # (runs as you; to use another user: install --user NAME)
+                                # (a new service runs as you; a reinstall keeps its user)
 kevins-food-map set-password
 kevins-food-map start
 ```
@@ -53,7 +53,7 @@ food.example.com {
 
 Behind a proxy like this (keep the default `HOST=127.0.0.1` so nobody can reach the app around the proxy), add `TRUST_PROXY=1` to `.env` so the login lockout sees visitors' real addresses. (The server uses the last `X-Forwarded-For` address, the one your proxy adds, so a visitor can't fake it.) Before going public, set daily quotas on the key, and read the key notes under "Google setup".
 
-Install as a normal user with sudo, not as root, so the service doesn't run as root. Install from a path without spaces.
+Install as a normal user with sudo, not as root, so the service doesn't run as root. Install from a path without spaces. Reinstalling keeps the user the service runs as; to change it (for example to a dedicated `foodmap` user), give that user the folder and run `sudo chown -R foodmap: .` then `bin/kevins-food-map install --user foodmap`. Install checks that the user can read `.env` and write `data/`. Updates and other commands can then be run by any admin with sudo: git and the tests run as the folder's owner.
 
 **Updates and the restaurant list.** The list on the server is the live one. `kevins-food-map update` sets it aside, pulls the new code, and puts it back, so an update never fails on it or replaces it. Changes to `data/restaurants.json` made in GitHub are not applied on the server; the update says so when that happens. To move the list to a new server, copy that file. Over SSH, run the update inside `tmux` or `screen`, so a dropped connection can't interrupt it halfway (it would roll back, but the service may stay stopped if `sudo` needs a password).
 
