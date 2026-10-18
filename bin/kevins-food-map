@@ -129,17 +129,19 @@ cmd_install() {
   fi
   # install uses the Node on your PATH (that's how you switch Node versions);
   # update and move keep the service's.
-  local node prev; prev="$(unit_node)"
+  local node prev was; prev="$(unit_node)"; was="$(unit_value WorkingDirectory)"
   node="$(command -v node || true)"; [ -n "$node" ] || { echo "node not found on PATH. Install Node.js 22+ first." >&2; exit 1; }
   node="$(readlink -f "$node")"
   check_node_version "$node"
   check_access "$user" "$DIR" "$node"
   render_unit "$user" "$node"
+  [ -z "$was" ] || [ "$was" = "$DIR" ] || echo "The service now runs this copy ($DIR) instead of $was; this copy's .env and restaurant list are the live ones."
   [ -z "$prev" ] || [ "$prev" = "$node" ] || echo "Node changed from $prev to $node ($("$node" -v))."
   [ -z "$before" ] || [ "$before" = "$(unit_value User)" ] || echo "The service user changed from $before to $(unit_value User)."
   sudo_ systemctl enable "$SERVICE"
   sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
-  if case "$(systemctl is-active "$SERVICE" || true)" in active|activating|reloading) true ;; *) false ;; esac; then
+  if case "$(systemctl is-active "$SERVICE" || true)" in active|activating|reloading|failed) true ;; *) false ;; esac; then
+    sudo_ systemctl reset-failed "$SERVICE" 2> /dev/null || true
     start_checked restart || exit 1
     echo "Installed and restarted."
   else
@@ -175,9 +177,8 @@ cmd_move() {
   done
   [ "$(stat -c %d "$DIR")" = "$(stat -c %d "$parent")" ] || { other_disk; exit 1; }
   user="$(unit_value User)"
-  node="$(unit_value ExecStart)"; node="${node%% *}" # same Node as now
-  case "$node" in /*/node) ;; *) echo "Unexpected ExecStart in $UNIT. Run: kevins-food-map install, then move again." >&2; exit 1 ;; esac
-  [ -x "$node" ] || { echo "The service's Node ($node) is missing. Reinstall Node, or run: kevins-food-map install" >&2; exit 1; }
+  node="$(unit_node)" # same Node as now
+  [ -n "$node" ] || { echo "The service's Node is missing. Run: kevins-food-map install, then move again." >&2; exit 1; }
   check_access "$user" "$DIR" "$node"
   if [ -n "$user" ] && [ "$user" != "$(id -un)" ] && ! as_user "$user" test -x "$parent"; then
     echo "The service user ($user) can't open $parent. Pick a folder it can reach." >&2; exit 1
