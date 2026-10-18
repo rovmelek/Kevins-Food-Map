@@ -22,12 +22,18 @@ DATA=data/restaurants.json
 need_unit() {
   [ -f "$UNIT" ] || { echo "Service not installed. Run: $0 install" >&2; exit 1; }
   local installed
-  installed="$(sed -n 's/^WorkingDirectory=//p' "$UNIT")"
+  installed="$(unit_value WorkingDirectory)"
   if [ "$installed" != "$DIR" ]; then
-    echo "Note: the service runs the copy in $installed, not this one ($DIR)." >&2
-    echo "To use this copy instead: $DIR/bin/kevins-food-map install" >&2
+    if [ -d "$installed" ]; then
+      echo "Note: the service runs the copy in $installed, not this one ($DIR)." >&2
+    else
+      echo "Note: the service points at $installed, which no longer exists." >&2
+    fi
+    echo "To run this copy instead (its .env and restaurant list become the live ones): $DIR/bin/kevins-food-map install" >&2
   fi
 }
+as_user() { local u="$1"; shift; if [ "$(id -u)" -eq 0 ]; then runuser -u "$u" -- "$@"; else sudo -u "$u" "$@"; fi; }
+unit_value() { [ -f "$UNIT" ] && sed -n "s/^$1=//p" "$UNIT" || true; }
 
 # systemd unit files can't hold these characters safely in paths.
 check_path() {
@@ -39,8 +45,8 @@ check_path() {
 # Writes the systemd unit. On install the service user is whoever ran the
 # command (the sudo user, if any); on update it stays whatever it was.
 render_unit() {
-  local node user="${1:-}"
-  node="$(command -v node || true)"
+  local user="${1:-}" node="${2:-}"
+  [ -n "$node" ] || node="$(command -v node || true)"
   [ -n "$node" ] || { echo "node not found on PATH. Install Node.js 22+ first." >&2; exit 1; }
   node="$(readlink -f "$node")"
   [ -n "$user" ] || user="${SUDO_USER:-$(id -un)}"
@@ -59,40 +65,80 @@ cmd_install() {
   [ ! -f "$DIR/.env" ] || chmod 600 "$DIR/.env"
   mkdir -p "$DIR/data"
   [ -f "$DIR/$DATA" ] || echo '[]' > "$DIR/$DATA"
-  render_unit
+  # Reinstalling keeps the user the service already runs as.
+  render_unit "$(unit_value User)"
   sudo_ systemctl enable "$SERVICE"
   sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
   echo "Installed. Start it with: kevins-food-map start"
 }
 
 # Moves the whole app folder (code, .env, restaurant list, backups) and points
-# the service and the kevins-food-map command at the new place.
+# the service and the kevins-food-map command at the new place. Only within
+# one disk, where a move is a single rename that either happens or doesn't;
+# everything that could fail is checked before the service is stopped.
 cmd_move() {
-  local dest="${1:-}" user running=0
+  local dest="${1:-}" parent
+  # Globals, not locals: the exit trap may run after this function returns.
+  user="" node="" state="" moved=0 switched=0 old="$DIR"
   [ -n "$dest" ] || { echo "Usage: kevins-food-map move /new/folder" >&2; exit 1; }
   need_unit
-  if [ "$(sed -n 's/^WorkingDirectory=//p' "$UNIT")" != "$DIR" ]; then
-    echo "Run move from the copy the service uses (see the note above)." >&2; exit 1
-  fi
-  dest="$(realpath -m "$dest")"
+  [ "$(unit_value WorkingDirectory)" = "$DIR" ] || { echo "Run move from the copy the service uses (see the note above)." >&2; exit 1; }
+  dest="$(realpath -m -- "$dest")"
+  parent="$(dirname "$dest")"
   [ ! -e "$dest" ] || { echo "$dest already exists. Pick a new folder name." >&2; exit 1; }
-  [ -d "$(dirname "$dest")" ] || { echo "$(dirname "$dest") doesn't exist. Create it first." >&2; exit 1; }
+  [ -d "$parent" ] || { echo "$parent doesn't exist. Create it first." >&2; exit 1; }
   case "$dest/" in "$DIR"/*) echo "Can't move the folder into itself." >&2; exit 1 ;; esac
+  case "$dest/" in /tmp/*|/var/tmp/*) echo "The service can't see /tmp or /var/tmp. Pick another place." >&2; exit 1 ;; esac
   check_path "$dest"
-  user="$(sed -n 's/^User=//p' "$UNIT")"
-  if systemctl is-active --quiet "$SERVICE"; then running=1; sudo_ systemctl stop "$SERVICE"; fi
-  if ! mv "$DIR" "$dest"; then
-    echo "Couldn't move the folder; nothing changed." >&2
-    [ "$running" = 0 ] || sudo_ systemctl start "$SERVICE"
+  [ ! -f "$DIR/$KEEP" ] || { echo "$KEEP exists: an update was interrupted. Sort that out first (see: kevins-food-map update)." >&2; exit 1; }
+  [ -w "$parent" ] || { echo "You can't write to $parent. Run the move with sudo, or pick a folder you own." >&2; exit 1; }
+  if [ "$(stat -c %d "$DIR")" != "$(stat -c %d "$parent")" ]; then
+    echo "$parent is on another disk, so the folder can't be moved in one step. Copy it yourself:" >&2
+    echo "  sudo systemctl stop $SERVICE && cp -a $DIR $dest && $dest/bin/kevins-food-map install && kevins-food-map start" >&2
+    echo "then delete $DIR once the app works." >&2
     exit 1
   fi
-  DIR="$dest"
-  render_unit "$user"
+  user="$(unit_value User)"
+  node="$(unit_value ExecStart)"; node="${node%% *}" # same Node as now
+  [ -x "$node" ] || { echo "The service's Node ($node) is missing. Reinstall Node, or run: kevins-food-map install" >&2; exit 1; }
+  if [ -n "$user" ] && [ "$user" != "$(id -un)" ] && ! as_user "$user" test -x "$parent"; then
+    echo "The service user ($user) can't open $parent. Pick a folder it can reach." >&2; exit 1
+  fi
+
+  state="$(systemctl is-active "$SERVICE" || true)"
+  sudo_ systemctl stop "$SERVICE"
+  # From here, an error or Ctrl+C puts the folder back and restarts the service.
+  trap 'move_cleanup' EXIT
+  trap 'exit 130' INT TERM HUP
+  mv -T -- "$DIR" "$dest"
+  moved=1 DIR="$dest"
+  render_unit "$user" "$node"
   sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
-  [ "$running" = 0 ] || sudo_ systemctl start "$SERVICE"
+  switched=1
   echo "Moved to $DIR."
-  [ "$running" = 0 ] || echo "The service is running again."
-  echo "If your terminal was inside the old folder, run: cd $DIR"
+  case "$state" in active|activating|reloading)
+    sudo_ systemctl start "$SERVICE"
+    sleep 2
+    if systemctl is-active --quiet "$SERVICE"; then echo "The service is running again."
+    else echo "The service didn't stay up. See: kevins-food-map logs" >&2; fi ;;
+  esac
+}
+move_cleanup() {
+  trap '' INT TERM HUP
+  set +e
+  [ "$switched" = 0 ] || return 0
+  if [ "$moved" = 1 ]; then
+    if mv -T -- "$DIR" "$old"; then
+      DIR="$old"; render_unit "$user" "$node" > /dev/null; sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
+      echo "Move stopped; the folder is back in $old." >&2
+    else
+      echo "Move stopped halfway: the folder is in $DIR but the service points at $old. Fix with: $DIR/bin/kevins-food-map install" >&2
+      return 0
+    fi
+  else
+    echo "Move stopped; nothing was moved." >&2
+  fi
+  case "$state" in active|activating|reloading) sudo_ systemctl start "$SERVICE" ;; esac
 }
 
 cmd_uninstall() {
