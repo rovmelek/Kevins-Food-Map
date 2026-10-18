@@ -1,0 +1,26 @@
+# Caddy configuration for Kevin's Food Map.
+#
+# Copy this file to /etc/caddy/Caddyfile, put your own domain name in place
+# of the example domain everywhere below, then run:
+#     sudo systemctl reload caddy
+#
+# Caddy gets and renews the HTTPS certificate for the domain by itself.
+# Step-by-step guide: README.md, "HTTPS with Caddy, step by step".
+
+food.example.com {
+	# Compress pages and scripts so they load faster.
+	encode zstd gzip
+
+	# Send every request to the app, which listens only on this server.
+	# Caddy adds the X-Forwarded-For and X-Forwarded-Proto headers the app
+	# needs (with TRUST_PROXY=1 in its .env).
+	# If you changed PORT in the app's .env, use that number instead of 3000.
+	reverse_proxy 127.0.0.1:3000
+}
+
+# Optional: also accept www.food.example.com and send visitors to the main
+# address. Keep this only if you created a DNS record for the www name;
+# otherwise delete these lines, or Caddy keeps failing to get its certificate.
+www.food.example.com {
+	redir https://food.example.com{uri} permanent
+}

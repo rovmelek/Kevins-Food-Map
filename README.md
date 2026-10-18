@@ -14,6 +14,7 @@ It is a single Node.js server with no npm dependencies, a plain HTML/CSS/JavaScr
 - [Configuration](#configuration)
 - [Using the app](#using-the-app)
 - [Running on a server](#running-on-a-server)
+  - [HTTPS with Caddy, step by step](#https-with-caddy-step-by-step)
 - [Google setup](#google-setup)
 - [Architecture](#architecture)
 - [Security](#security)
@@ -108,17 +109,209 @@ Install with `--user` checks that the user can read `.env`, write `data/` and ru
 
 **Node version.** The service keeps the Node it was installed with; `update` and `move` don't change it unless it has been removed. To switch, install the new Node somewhere the service user can run it (for example under `/usr/local`), then rerun `bin/kevins-food-map install` from a shell whose `node` is the new one, without `sudo` in front.
 
-### HTTPS and a reverse proxy
+### HTTPS with Caddy, step by step
 
-The server listens on `127.0.0.1:3000` by default. To reach it from the internet, put a web server with HTTPS in front of it. With [Caddy](https://caddyserver.com/), which gets certificates automatically, the whole config is:
+The app only listens on the server itself (`127.0.0.1:3000`), and it speaks plain HTTP. To let people reach it from the internet, safely and with the padlock in the browser, you put a **web server** in front of it. The web server answers visitors on the normal web ports, handles HTTPS, and passes each request on to the app. This is called a *reverse proxy*.
+
+This guide uses [Caddy](https://caddyserver.com/), because it gets and renews the HTTPS certificate for you, and its whole configuration is a few lines. (nginx or Apache work too; see [Other web servers](#other-web-servers) below.)
+
+**Who runs what.** Nothing here runs as root.
+
+| Program | Runs as | Started by |
+| --- | --- | --- |
+| The app (`kevins-food-map`) | your own user, or a dedicated user ([Install as a service](#install-as-a-service)) | its systemd service, from `bin/kevins-food-map install` |
+| Caddy | the `caddy` user, created by Caddy's package | its systemd service, set up by Caddy's package |
+
+You type the commands below as your normal user. Commands that change the system start with `sudo`, which asks for your password. Never start Caddy by hand with `sudo caddy run`; let its service run it.
+
+**What you need first**
+- The app installed and running as a service ([Install as a service](#install-as-a-service)). Check with `kevins-food-map status`.
+- A domain name you control, for example `food.example.com`. Every place below that says `food.example.com`, use your own name instead.
+- An Ubuntu or Debian server that is reachable from the internet.
+
+#### Step 1: Point your domain at the server
+
+1. Find your server's public IP address. Your hosting company shows it, or run `curl -4 ifconfig.me` on the server.
+2. At the company where you bought the domain, open its **DNS** settings and add a record:
+   - Type: `A`
+   - Name: `food` (for `food.example.com`), or `@` to use the bare domain (`example.com`)
+   - Value: your server's IP address
+
+   If a record with that name already exists (type `A`, `AAAA` or `CNAME`, often a "parking" record from the registrar), change it or delete it. A leftover `AAAA` record pointing somewhere else stops Caddy from getting a certificate.
+3. Optional: to also accept the `www.` address, add a second `A` record pointing at the same IP address, named `www.food` (for `www.food.example.com`) or `www` (if you used `@`).
+4. Wait until it works. From any computer, `nslookup food.example.com` should show your server's IP address. This can take a few minutes, sometimes longer.
+
+Do this **before** starting Caddy, because Caddy asks for the certificate as soon as it starts, and that only works once the name points at your server.
+
+#### Step 2: Open the web ports
+
+Visitors and the certificate service must be able to reach ports 80 (HTTP) and 443 (HTTPS).
+- Check the server's own firewall with `sudo ufw status`.
+  - If it says `Status: inactive`, skip this; nothing is blocked.
+  - If it says `Status: active`, run:
+    ```sh
+    sudo ufw allow 80/tcp
+    sudo ufw allow 443/tcp
+    sudo ufw allow 443/udp    # for HTTP/3, which Caddy also offers
+    ```
+  - Don't turn the firewall on (`sudo ufw enable`) as part of this. If you ever do, run `sudo ufw allow OpenSSH` first, or you can lock yourself out of the server.
+- If your hosting company has its own firewall in its web control panel, allow ports 80 and 443 there too.
+- Do **not** open port 3000. The app must only be reachable through Caddy.
+
+#### Step 3: Install Caddy
+
+First check that no other web server is already using the web ports:
+
+```sh
+sudo ss -ltnp '( sport = :80 or sport = :443 )'
+```
+
+- If it shows only a heading line, the ports are free; continue below.
+- If it lists `apache2` or `nginx`, another web server is already running. If it hosts other websites, keep it and use it instead of Caddy (see [Other web servers](#other-web-servers)). If it hosts nothing you need, turn it off for good with `sudo systemctl disable --now apache2` (or `nginx`) and continue.
+- If it lists `caddy`, Caddy is already installed; skip to Step 4.
+- If it lists anything else, find out what that program is before going on.
+
+Then copy and paste these lines one by one (if a line asks whether to overwrite a file, answer `y`; if `apt` asks "Do you want to continue?", press Enter). They add Caddy's official package source, then install it (from Caddy's install guide for Debian and Ubuntu):
+
+```sh
+sudo apt install --yes debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+sudo chmod o+r /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install caddy
+```
+
+Caddy now runs as a service called `caddy` and starts by itself after a reboot. Check it with `systemctl status caddy --no-pager`; it should say `active (running)`.
+
+#### Step 4: Tell Caddy about your site
+
+Caddy reads its settings from the file `/etc/caddy/Caddyfile`. Replace that file with this app's example (change the folder in the first line to wherever you installed the app):
+
+```sh
+cd ~/Kevins-Food-Map       # the app's folder (with a dedicated user: cd /srv/kevins-food-map)
+sudo cp deploy/Caddyfile.example /etc/caddy/Caddyfile
+```
+
+Put your domain name in it, in place of `food.example.com` everywhere (replace `food.yourdomain.com` here with your real name):
+
+```sh
+sudo sed -i 's/food\.example\.com/food.yourdomain.com/g' /etc/caddy/Caddyfile
+```
+
+Check that the replacement worked; this should print `0`:
+
+```sh
+grep -c example.com /etc/caddy/Caddyfile
+```
+
+Then open the file to look at it:
+
+```sh
+sudo nano /etc/caddy/Caddyfile
+```
+
+- If you did **not** create the `www.` DNS record in Step 1, delete the last block (the lines from `www.` to the closing `}`). Otherwise Caddy keeps trying, and failing, to get a certificate for it.
+- If you changed `PORT` in the app's `.env`, change `3000` to that number.
+
+Save with Ctrl+O and Enter, then leave with Ctrl+X.
+
+The important part of the file is just this:
 
 ```caddyfile
 food.example.com {
-    reverse_proxy 127.0.0.1:3000
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3000
 }
 ```
 
-Behind a proxy, keep `HOST=127.0.0.1` (so nobody can reach the app around the proxy) and set `TRUST_PROXY=1`. The server then takes the visitor's address from the last `X-Forwarded-For` entry, the one your proxy adds, so a visitor can't fake it. Before going public, read the key notes in [Google setup](#google-setup).
+It means: "for visitors to `food.example.com`, compress the answers and pass everything on to the app on this server." Caddy adds the HTTPS certificate, sends `http://` visitors to `https://`, and tells the app each visitor's real address.
+
+Check the file for typing mistakes, then load it:
+
+```sh
+caddy validate --config /etc/caddy/Caddyfile   # should end with "Valid configuration"
+sudo systemctl reload caddy
+```
+
+#### Step 5: Tell the app it is behind Caddy
+
+Open the app's `.env` file:
+
+```sh
+cd ~/Kevins-Food-Map       # the app's folder (with a dedicated user: cd /srv/kevins-food-map)
+nano .env                  # with a dedicated user: sudo -u foodmap nano .env
+```
+
+1. Find the line `# TRUST_PROXY=1` and delete the `# ` in front of it, so it reads `TRUST_PROXY=1`. If there is no such line, add `TRUST_PROXY=1` on a new line at the end.
+2. Leave the line `# HOST=0.0.0.0 ...` exactly as it is, with its `#`. If you find a line starting with `HOST=` **without** a `#`, it must say `HOST=127.0.0.1`; otherwise delete that line.
+
+Save with Ctrl+O and Enter, leave with Ctrl+X, then restart the app: `kevins-food-map restart`.
+
+- Without a `HOST` line the app listens only on the server itself, so it can only be reached through Caddy. That is what you want.
+- `TRUST_PROXY=1` makes the app read each visitor's address from the header Caddy adds. Without it, every visitor looks like the same address (Caddy's), and one person's wrong passwords would lock everyone out of Manage. Only set it when Caddy (or another proxy) is in front, because without a proxy anyone could fake that header.
+
+#### Step 6: Check that it works
+
+1. Open `https://food.example.com` in your browser (with your domain). You should see the map with the padlock in the address bar.
+2. Open `http://food.example.com` (without the "s"). You should land on the `https://` address.
+3. Open **Manage** and log in.
+4. Optional: `curl -I https://food.example.com` should show `200` on its first line. Run it from another computer if you can; on some hosts a server can't reach its own public address, so a failure from the server itself proves nothing.
+
+Before you tell people the address, read the key notes in [Google setup](#google-setup): if your Google key has a **Websites** restriction, it must include your new address (`https://food.example.com/*`), and a public site should have daily quotas on the key.
+
+#### When something goes wrong
+
+| What you see | What to do |
+| --- | --- |
+| The browser can't connect at all | Check Step 1 (`nslookup` shows your server's IP) and Step 2 (ports 80 and 443 open, also in the hosting company's firewall). Then look at Caddy's log: `sudo journalctl -u caddy -n 50 --no-pager`. |
+| A security or SSL error instead of the page | Caddy couldn't get the certificate yet, usually because of DNS or a closed port. Fix that, then run `sudo systemctl reload caddy` and look at the log (above). |
+| `systemctl status caddy` says `failed`, and the log says "address already in use" | Another web server has the ports. See the check at the start of Step 3, then run `sudo systemctl restart caddy`. |
+| The page loads, but the map stays grey or says Google Maps can't load | Your Google key's **Websites** restriction doesn't include the new address. In Google Cloud console, add `https://food.example.com/*` (with your domain) to it. Also check that Maps JavaScript API is enabled on the key and billing is turned on; see [Google setup](#google-setup). |
+| "502 Bad Gateway" | Caddy works, but the app isn't running. Run `kevins-food-map status`, and `kevins-food-map logs` for the reason. |
+| `caddy validate` shows an error | It names the line with the mistake. A missing `}` is the most common one. |
+| Wrong passwords lock out everybody at once | `TRUST_PROXY=1` is missing from `.env`, or the app wasn't restarted after adding it (Step 5). |
+| You changed the Caddyfile and nothing happened | Run `sudo systemctl reload caddy`. |
+
+**Day-to-day Caddy commands**
+
+| Command | What it does |
+| --- | --- |
+| `systemctl status caddy --no-pager` | Is Caddy running? |
+| `sudo systemctl reload caddy` | Load an edited Caddyfile without stopping the site. |
+| `sudo journalctl -u caddy -n 50 --no-pager` | The last 50 lines of Caddy's log. |
+| `caddy validate --config /etc/caddy/Caddyfile` | Check the Caddyfile for mistakes. |
+
+Caddy renews the certificate by itself before it expires; there is nothing to do. Updating the app (`kevins-food-map update`) doesn't touch Caddy, and updating Caddy (`sudo apt update && sudo apt upgrade`) doesn't touch the app.
+
+#### Other web servers
+
+nginx or Apache work as well, especially if one is already running on the server. They don't get certificates by themselves (use `certbot`), and they must send the visitor's address (for the login lockout) and the protocol (so the login cookie is marked secure). For nginx that means, inside the HTTPS `server` block:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Then check and load it: `sudo nginx -t && sudo systemctl reload nginx`.
+
+For Apache, enable its proxy modules (`sudo a2enmod proxy proxy_http headers`), and inside the `<VirtualHost *:443>` block that `certbot --apache` creates add:
+
+```apache
+ProxyPreserveHost On
+ProxyPass / http://127.0.0.1:3000/
+ProxyPassReverse / http://127.0.0.1:3000/
+RequestHeader set X-Forwarded-Proto "https"
+```
+
+Then check it and restart Apache (needed once after enabling modules): `sudo apachectl configtest && sudo systemctl restart apache2`. Apache adds `X-Forwarded-For` by itself, but not `X-Forwarded-Proto`; without that line the login cookie isn't marked secure.
+
+Set `TRUST_PROXY=1` in `.env` and leave `HOST` at its default, as in Step 5. The app uses the last `X-Forwarded-For` entry, the one your proxy adds, so a visitor can't fake their address. Before going public, also read the key notes in [Google setup](#google-setup).
 
 ### Data, updates and backups
 
@@ -236,7 +429,7 @@ All responses are JSON; errors are `{ "error": "…" }` with a status code (400 
 - **Forged requests.** Changes must be JSON, which browsers can't send cross-site without permission, and a request the browser marks as cross-site (`Sec-Fetch-Site`) is refused.
 - **Page.** A strict Content Security Policy (Google's recommended one for Maps) with a fresh nonce per page load, so injected scripts can't run; everything shown is escaped first; the page can't be framed by other sites.
 - **Service.** The systemd unit runs as the user who installed it or the one given with `--user` (the script warns if that is root), may only write to `data/`, and has no extra privileges, devices or kernel access.
-- **HTTPS.** Over plain HTTP the password crosses the network unencrypted, so use HTTPS anywhere but your own machine.
+- **HTTPS.** Over plain HTTP the password crosses the network unencrypted, so use HTTPS anywhere but your own machine ([HTTPS with Caddy, step by step](#https-with-caddy-step-by-step)).
 - **Public data.** If the repository is public, so is any restaurant list committed to it.
 
 ## Development
