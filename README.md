@@ -39,6 +39,7 @@ kevins-food-map start
 | `kevins-food-map set-password` | set or change the Manage password (then `restart`) |
 | `kevins-food-map test` | run the automated tests |
 | `kevins-food-map update` | pull new code, run the tests, restart if they pass; if they fail or you press Ctrl+C, go back to the previous code |
+| `kevins-food-map move /new/folder` | move the app folder (code, `.env`, restaurant list, backups) and point the service and command there |
 | `kevins-food-map uninstall` | remove the service (keeps your data) |
 
 The server only listens on `127.0.0.1:3000`. To reach it from the internet, put a web server with HTTPS in front of it; location sharing in browsers only works over HTTPS. With [Caddy](https://caddyserver.com/), which gets certificates automatically, the whole config is:

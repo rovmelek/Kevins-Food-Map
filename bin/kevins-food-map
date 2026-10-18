@@ -7,6 +7,7 @@
 #   kevins-food-map set-password  set the password for the Manage window
 #   kevins-food-map update      pull new code (keeps this server's restaurant list),
 #                         run tests, restart if they pass, else roll back
+#   kevins-food-map move DIR    move the app folder to DIR and point the service there
 #   kevins-food-map uninstall   stop and remove the service
 set -euo pipefail
 
@@ -20,6 +21,12 @@ DATA=data/restaurants.json
 
 need_unit() {
   [ -f "$UNIT" ] || { echo "Service not installed. Run: $0 install" >&2; exit 1; }
+  local installed
+  installed="$(sed -n 's/^WorkingDirectory=//p' "$UNIT")"
+  if [ "$installed" != "$DIR" ]; then
+    echo "Note: the service runs the copy in $installed, not this one ($DIR)." >&2
+    echo "To use this copy instead: $DIR/bin/kevins-food-map install" >&2
+  fi
 }
 
 # systemd unit files can't hold these characters safely in paths.
@@ -56,6 +63,36 @@ cmd_install() {
   sudo_ systemctl enable "$SERVICE"
   sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
   echo "Installed. Start it with: kevins-food-map start"
+}
+
+# Moves the whole app folder (code, .env, restaurant list, backups) and points
+# the service and the kevins-food-map command at the new place.
+cmd_move() {
+  local dest="${1:-}" user running=0
+  [ -n "$dest" ] || { echo "Usage: kevins-food-map move /new/folder" >&2; exit 1; }
+  need_unit
+  if [ "$(sed -n 's/^WorkingDirectory=//p' "$UNIT")" != "$DIR" ]; then
+    echo "Run move from the copy the service uses (see the note above)." >&2; exit 1
+  fi
+  dest="$(realpath -m "$dest")"
+  [ ! -e "$dest" ] || { echo "$dest already exists. Pick a new folder name." >&2; exit 1; }
+  [ -d "$(dirname "$dest")" ] || { echo "$(dirname "$dest") doesn't exist. Create it first." >&2; exit 1; }
+  case "$dest/" in "$DIR"/*) echo "Can't move the folder into itself." >&2; exit 1 ;; esac
+  check_path "$dest"
+  user="$(sed -n 's/^User=//p' "$UNIT")"
+  if systemctl is-active --quiet "$SERVICE"; then running=1; sudo_ systemctl stop "$SERVICE"; fi
+  if ! mv "$DIR" "$dest"; then
+    echo "Couldn't move the folder; nothing changed." >&2
+    [ "$running" = 0 ] || sudo_ systemctl start "$SERVICE"
+    exit 1
+  fi
+  DIR="$dest"
+  render_unit "$user"
+  sudo_ ln -sf "$DIR/bin/kevins-food-map" /usr/local/bin/kevins-food-map
+  [ "$running" = 0 ] || sudo_ systemctl start "$SERVICE"
+  echo "Moved to $DIR."
+  [ "$running" = 0 ] || echo "The service is running again."
+  echo "If your terminal was inside the old folder, run: cd $DIR"
 }
 
 cmd_uninstall() {
@@ -155,5 +192,6 @@ case "${1:-}" in
   test)      cd "$DIR" && npm test ;;
   set-password) cd "$DIR" && node scripts/set-password.js && { [ -f "$UNIT" ] && echo "Then: kevins-food-map restart" || true; } ;;
   update)    cmd_update ;;
-  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  move)      cmd_move "${2:-}" ;;
+  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
