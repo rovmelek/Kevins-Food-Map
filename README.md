@@ -57,7 +57,7 @@ The office and the map style can also be changed in **Manage → Settings** (see
 
 ## Using the app
 
-Anyone can view the list and the map. The map opens on the visitor's area (or the office's, when the visitor doesn't share their location or has no listed restaurant within 40 km) with the restaurants nearby; restaurants farther away, in other cities or countries, are on the map but outside that first view. Choosing food types in **Filter** moves the map to the matching restaurants, again preferring nearby ones.
+Anyone can view the list and the map. The map opens centred on the visitor (or on the office, when the visitor doesn't share their location or has no listed restaurant within 40 km), zoomed to show the restaurants within 20 km (or 40 km, if none are that close); restaurants much farther away, in other cities or countries, are on the map but outside that first view. Choosing food types in **Filter** moves the map to the matching restaurants, again preferring nearby ones.
 
 **Manage** asks for the admin password and has three tabs:
 

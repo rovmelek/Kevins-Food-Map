@@ -342,34 +342,44 @@ function pinElement() {
   return el;
 }
 
-// The view shows the origin (the visitor, or the office) and the listed
-// restaurants within NEARBY_KM of it, not every restaurant in the world. A
-// visitor with nothing nearby gets the office's area; only when nothing listed
-// is near either (a filter that matches far-away places) does it show them all.
+// The view is centred on the origin (the visitor, or the office) and zoomed to
+// show the listed restaurants within VIEW_KM of it (or, if none, within
+// NEARBY_KM), not every restaurant in the world. A visitor with nothing within
+// NEARBY_KM gets the office's area; only when nothing listed is near either (a
+// filter that matches far-away places) does it show them all, uncentred.
 // `also`: restaurants to bring into view as well, such as ones just added.
+const VIEW_KM = 20;
 const NEARBY_KM = 40;
 
 function fitToVisible(also = []) {
   if (!map.instance) return;
   const items = visible();
-  const around = o => (o ? items.filter(r => distanceKm(o, r) <= NEARBY_KM) : []);
-  const office = state.config.office;
-  let points = [];
-  for (const o of [state.origin, office]) {
-    const near = around(o);
-    if (near.length) { points = [o, ...near]; break; }
+  const within = (o, km) => items.filter(r => distanceKm(o, r) <= km);
+  let centre = null, points = [];
+  for (const o of [state.origin, state.config.office]) {
+    if (!o) continue;
+    const close = within(o, VIEW_KM);
+    const near = close.length ? close : within(o, NEARBY_KM);
+    if (near.length) { centre = o; points = near; break; }
   }
-  if (!points.length) points = items;
+  if (!centre) points = items;
   const shown = new Set(items.map(r => r.id));
-  points = [...points, ...also.filter(r => shown.has(r.id))];
+  const inView = new Set(points.map(r => r.id));
+  const extra = also.filter(r => shown.has(r.id) && !inView.has(r.id));
+  // Can't stay centred and show them too; keep the origin in view, though.
+  if (extra.length) { points = [centre, ...points, ...extra].filter(Boolean); centre = null; }
   // Nothing listed: just centre on the visitor or the office.
   if (!points.length) { if (state.origin) map.instance.setCenter(latLng(state.origin)); return; }
-  // A single point, or points all within a few blocks: a street-level view
-  // (fitBounds would zoom in much further).
-  const c = points[0];
+  // Everything within a few blocks: a street-level view (fitBounds would zoom
+  // in much further).
+  const c = centre || points[0];
   if (points.every(p => distanceKm(c, p) < 0.5)) { map.instance.setCenter(latLng(c)); map.instance.setZoom(15); return; }
   const b = new map.api.LatLngBounds();
-  points.forEach(p => b.extend(latLng(p)));
+  for (const p of points) {
+    b.extend(latLng(p));
+    // Mirrored through the centre, so the fitted view has the centre in the middle.
+    if (centre) b.extend({ lat: 2 * centre.lat - p.lat, lng: 2 * centre.lng - p.lng });
+  }
   map.instance.fitBounds(b, 40);
 }
 
