@@ -20,7 +20,7 @@ const state = {
   editShow: 'listed',  // 'listed' | 'archived'
   busy: false,         // a Manage action is running; other actions wait
 };
-const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null, mapId: null };
+const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null, mapId: null, userMoved: false };
 
 const ICONS = {
   Japanese: '🍣', Chinese: '🥟', Korean: '🍲', Thai: '🍜', Vietnamese: '🍜', Indian: '🍛', Italian: '🍝',
@@ -272,6 +272,9 @@ async function initMap() {
   map.info = new InfoWindow({ pixelOffset: new google.maps.Size(0, -Math.round(PIN_HEIGHT * 1.3)) });
   map.info.addListener('closeclick', deselect);   // the popup's ✕
   map.instance.addListener('click', e => (state.picking ? endPick(e.latLng) : deselect())); // a click on empty map
+  // Any use of the map (drag, wheel, pinch, buttons, keys) stops the view from
+  // jumping to the visitor when their location comes in late.
+  for (const ev of ['pointerdown', 'wheel', 'keydown']) $('map').addEventListener(ev, () => { map.userMoved = true; }, { capture: true, passive: true });
   map.api = google.maps;
   syncPickButton();
   renderList();
@@ -339,13 +342,34 @@ function pinElement() {
   return el;
 }
 
-function fitToVisible() {
+// The view shows the origin (the visitor, or the office) and the listed
+// restaurants within NEARBY_KM of it, not every restaurant in the world. A
+// visitor with nothing nearby gets the office's area; only when nothing listed
+// is near either (a filter that matches far-away places) does it show them all.
+// `also`: restaurants to bring into view as well, such as ones just added.
+const NEARBY_KM = 40;
+
+function fitToVisible(also = []) {
   if (!map.instance) return;
   const items = visible();
-  if (!items.length) return;
-  if (items.length === 1) { map.instance.setCenter(latLng(items[0])); map.instance.setZoom(15); return; }
+  const around = o => (o ? items.filter(r => distanceKm(o, r) <= NEARBY_KM) : []);
+  const office = state.config.office;
+  let points = [];
+  for (const o of [state.origin, office]) {
+    const near = around(o);
+    if (near.length) { points = [o, ...near]; break; }
+  }
+  if (!points.length) points = items;
+  const shown = new Set(items.map(r => r.id));
+  points = [...points, ...also.filter(r => shown.has(r.id))];
+  // Nothing listed: just centre on the visitor or the office.
+  if (!points.length) { if (state.origin) map.instance.setCenter(latLng(state.origin)); return; }
+  // A single point, or points all within a few blocks: a street-level view
+  // (fitBounds would zoom in much further).
+  const c = points[0];
+  if (points.every(p => distanceKm(c, p) < 0.5)) { map.instance.setCenter(latLng(c)); map.instance.setZoom(15); return; }
   const b = new map.api.LatLngBounds();
-  items.forEach(r => b.extend(latLng(r)));
+  points.forEach(p => b.extend(latLng(p)));
   map.instance.fitBounds(b, 40);
 }
 
@@ -360,6 +384,7 @@ function deselect() {
 function select(id, { fromMap = false, toggle = true } = {}) {
   if (toggle && state.selectedId === id) { deselect(); return; }
   state.selectedId = id;
+  map.userMoved = true; // the map moves to it; don't take that away later
   const r = state.restaurants.find(x => x.id === id);
   renderList();
   if (fromMap) document.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -382,6 +407,9 @@ function locateUser(explicit = false) {
   navigator.geolocation.getCurrentPosition(pos => {
     state.origin = { lat: pos.coords.latitude, lng: pos.coords.longitude, label: 'your location', isUser: true };
     renderAll();
+    // Move the map to the visitor, unless they have already moved it or picked
+    // a restaurant while the location was coming in.
+    if (explicit || (!map.userMoved && !state.selectedId)) fitToVisible();
   }, err => {
     if (explicit) renderOrigin(err.code === 1 ? 'Location permission was denied.' : 'Couldn’t get your location.');
   }, { timeout: 10000, maximumAge: 300000 });
@@ -680,7 +708,7 @@ async function submitAdd(e) {
     }).join('') + (warning ? `<li class="duplicate">${esc(warning)}</li>` : '');
     input.value = failed.length && addMode() === 'bulk' ? failed.map(r => r.url).join('\n') : failed.length ? input.value : '';
     input.focus();
-    if (changed) fitToVisible();
+    if (changed) fitToVisible(results.filter(r => r.status === 'added' || r.status === 'restored').map(r => r.restaurant));
   } catch (err) {
     out.innerHTML = err.handled ? '' : `<li class="error">✕ ${esc(err.message)}</li>`;
   } finally {

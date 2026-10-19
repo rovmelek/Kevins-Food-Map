@@ -57,7 +57,9 @@ The office and the map style can also be changed in **Manage → Settings** (see
 
 ## Using the app
 
-Anyone can view the list and the map. **Manage** asks for the admin password and has three tabs:
+Anyone can view the list and the map. The map opens on the visitor's area (or the office's, when the visitor doesn't share their location or has no listed restaurant within 40 km) with the restaurants nearby; restaurants farther away, in other cities or countries, are on the map but outside that first view. Choosing food types in **Filter** moves the map to the matching restaurants, again preferring nearby ones.
+
+**Manage** asks for the admin password and has three tabs:
 
 - **Add:** paste one Google Maps link, or a bulk paste of Markdown or plain text with any number of links (up to 100 at once). Each link gets its own result: added, already listed, restored from the archive, skipped (another kind of link in the paste) or refused with the reason. A paste with no Google Maps links at all is refused. Duplicates are never added twice; see [How a link becomes a restaurant](#how-a-link-becomes-a-restaurant).
 - **Restaurants:** search, change a restaurant's food type, select several and **Update from Google** (fresh phone, address and rating), **Archive**. Under **Archived**, restore or **Delete forever** (the only real delete, with a confirmation).
