@@ -110,7 +110,7 @@ bin/kevins-food-map install --user foodmap
 
 Install with `--user` checks that the user can read `.env`, write `data/` and run Node, so Node must be installed where that user can run it (for example under `/usr/local`, not in your own home through nvm). The folder's path must not contain spaces or special characters. With a dedicated user, run `sudo kevins-food-map set-password` and `sudo kevins-food-map update` (Node must then also be on sudo's PATH); git and the tests then run as the folder's owner, who needs access to the repository if it is private.
 
-**Node version.** The service keeps the Node it was installed with; `update` and `move` don't change it unless it has been removed. To switch, install the new Node somewhere the service user can run it (for example under `/usr/local`), then rerun `bin/kevins-food-map install` from a shell whose `node` is the new one, without `sudo` in front.
+**Node version.** The service keeps the Node it was installed with; `update` and `move` don't change it unless it has been removed. After a Node.js security release, upgrade Node, then check what the service runs: `systemctl cat kevins-food-map` shows the Node program as the first word of the `ExecStart=` line, and running that path with `--version` shows its version. If it is already the new version (for example Node from apt, upgraded in place), `kevins-food-map restart` is enough; otherwise switch as below. To switch, install the new Node somewhere the service user can run it (for example under `/usr/local`), then rerun `bin/kevins-food-map install` from a shell whose `node` is the new one, without `sudo` in front.
 
 ### HTTPS with Caddy, step by step
 
@@ -519,7 +519,7 @@ cd ~/Kevins-Food-Map
 git rev-parse HEAD > ~/food-map-previous-version   # notes which version you have now
 git pull
 cd docker
-docker compose build
+docker compose build --pull     # --pull also fetches the newest Node 24
 docker compose run --rm app node --test "test/*.test.js"    # the last lines should say "fail 0"
 docker compose up -d                                        # only if the tests passed
 ```
@@ -532,6 +532,8 @@ cd docker && docker compose build && docker compose up -d
 ```
 
 `git pull` never changes the live list, because the live list is in `docker-data/app/`, not in `data/`. To update Caddy too: `docker compose pull caddy && docker compose up -d`.
+
+**Node.js security releases.** When Node.js announces security fixes, run the update above even if the app's code hasn't changed: `--pull` rebuilds the app on the newest Node 24. Afterwards, `docker compose exec app node --version` shows the version in use. If it still shows the old version, Docker's Node image hasn't been updated yet (this can take a day after the announcement); run the update again later.
 
 **Backups.** Before the first change of each day, the app copies the list into `docker-data/app/backups/` and keeps the last 14. To undo a mistake, in the `docker` folder (`ls ../docker-data/app/backups` lists them; use the date you want):
 
