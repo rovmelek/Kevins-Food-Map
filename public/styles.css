@@ -19,6 +19,7 @@ body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; 
 /* Title and Manage on the first line, the search and filters below. */
 .top .controls { order: 1; flex: 1 0 100%; }
 h1 { font-size: 20px; margin: 0; }
+.lang-btn { margin-left: auto; white-space: nowrap; }
 .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn:disabled { opacity: .6; cursor: not-allowed; }
@@ -145,9 +146,11 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
    The search box opens over the title. */
 @media (max-width: 760px) {
   .top { flex-wrap: nowrap; gap: 6px; padding: 8px 12px 4px; }
-  h1 { flex: 1; min-width: 0; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Up to two lines (36px, inside the 44px buttons' height), so the title isn't cut short beside the icons. */
+  h1 { flex: 1; min-width: 0; font-size: 15px; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .top .controls { flex: none; flex-wrap: nowrap; position: static; }
-  #manageBtn { order: 2; }
+  .lang-btn { order: 2; margin-left: 0; }
+  #manageBtn { order: 3; }
   .controls input { display: none; }
   /* Still there for screen readers, just not on screen. */
   .top.searching h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -157,6 +160,7 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
   .search-toggle, .country-icon { display: inline-flex; }
   /* 44px: the smallest comfortable tap target. */
   .btn.icon-only, .filter-btn, #manageBtn { padding: 8px 9px; min-width: 44px; min-height: 44px; }
+  .lang-btn { padding: 8px 6px; min-width: 38px; min-height: 44px; font-size: 13px; }
   .search-toggle .i-close, .top.searching .search-toggle .i-open { display: none; }
   .top.searching .search-toggle .i-close { display: block; }
   .search-toggle.active, .country-wrap.active .country-icon { border-color: var(--accent); color: var(--accent); }
@@ -169,6 +173,10 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
   /* The search icon turns into a ✕ that clears and closes, so the box needs no ✕ of its own. */
   #search::-webkit-search-cancel-button { display: none; }
   .filter-panel { left: 12px; right: 12px; }
+}
+/* Under 360px the title would be a clipped fragment: the space stays, the text only for screen readers. */
+@media (max-width: 359px) {
+  h1 { font-size: 0; }
 }
 /* Cards are compact: the phone and address show only on the selected card,
    and the chevron says there is more. Tapping a card expands it. The hidden
@@ -189,6 +197,8 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 /* Phones held sideways: list and map side by side, with a narrower list. */
 @media (max-width: 760px) and (orientation: landscape) {
   .app { grid-template-columns: minmax(240px, 45%) 1fr; height: 100vh; height: 100dvh; }
+  /* No room for the title beside the icons; screen readers still get it. */
+  h1 { font-size: 0; }
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #15181e; --panel: #1d2129; --text: #e7e9ee; --muted: #9aa3b2; --border: #2e3440; --hover: #2a2420;

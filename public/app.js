@@ -24,6 +24,89 @@ const state = {
 };
 const map = { api: null, instance: null, markers: new Map(), info: null, PinOverlay: null, mapId: null, userMoved: false };
 
+// ---- language ---------------------------------------------------------------
+
+// The visitor's language: the page address's ?lang= (what the switch uses when
+// storage is blocked; it counts for that page load only, never saved), else the
+// saved choice, else the browser's languages. Switching reloads the page: Google
+// Maps can't change its language in place.
+// If i18n.js didn't load, the page runs in English with just what the list needs
+// (the other texts in index.html stay as written there).
+const hasI18n = typeof MESSAGES !== 'undefined';
+const messages = hasI18n ? MESSAGES : {
+  en: {
+    allCountries: 'All countries', countryUnknown: 'Country unknown', noRestaurantsYet: 'No restaurants yet.',
+    restaurantCount: ['{n} restaurant', '{n} restaurants'], restaurantCountSr: [', {n} restaurant', ', {n} restaurants'],
+    shownOf: '{n} of {total} shown', noMatch: 'No restaurants match.',
+    emptyList: 'No restaurants yet. Use “Manage” to add Google Maps links.',
+    phoneNA: 'Phone not available', addressNA: 'Address not available', sortedFromYou: 'Sorted by distance from your location.',
+    sortedFrom: 'Sorted by distance from {place}. {button}', useMyLocation: 'Use my location', ft: '{n} ft', mi: '{n} mi',
+    ratingLabel: 'Google rating {rating} out of 5', ratingLabelReviews: 'Google rating {rating} out of 5, {count} reviews',
+    openInMaps: 'Open in Google Maps', loadFailed: 'Could not load: {message}',
+    filterByType: 'Filter by food type', filterByTypeN: 'Filter by food type, {n} selected', removeFilter: 'Remove filter {type}',
+    showMap: 'Show map', showList: 'Show list', search: 'Search', closeSearch: 'Close search',
+    locUnsupported: 'This browser can’t share its location.', locDenied: 'Location permission was denied.', locFailed: 'Couldn’t get your location.',
+  },
+};
+const foodTypes = hasI18n ? FOOD_TYPES : {};
+const LANG_KEY = 'foodmap-lang';
+const HTML_LANG = { en: 'en', 'zh-TW': 'zh-Hant-TW' };
+const OTHER_LANG = { en: 'zh-TW', 'zh-TW': 'en' };
+const SWITCH_TEXT = { en: 'EN', 'zh-TW': '中文' }; // the button names the language it switches to
+
+function saveLang(l) {
+  try { localStorage.setItem(LANG_KEY, l); return localStorage.getItem(LANG_KEY) === l; } catch { return false; }
+}
+function pickLang() {
+  if (!hasI18n) return 'en';
+  const asked = Object.keys(MESSAGES).find(l => l.toLowerCase() === new URLSearchParams(location.search).get('lang')?.toLowerCase());
+  if (asked) return asked;
+  try {
+    const saved = localStorage.getItem(LANG_KEY);
+    if (Object.hasOwn(MESSAGES, saved)) return saved;
+  } catch { /* storage blocked: follow the browser */ }
+  return detectLang(navigator.languages?.length ? navigator.languages : [navigator.language]);
+}
+const uiLang = pickLang();
+
+const missingKeys = new Set();
+function t(key, vars = {}) {
+  let text = messages[uiLang][key] ?? messages.en[key];
+  if (text == null) {
+    if (!missingKeys.has(key)) { missingKeys.add(key); console.warn(`Missing text: ${key}`); }
+    text = key;
+  }
+  if (Array.isArray(text)) text = text[vars.n === 1 ? 0 : 1]; // English plurals
+  return text.replace(/\{(\w+)\}/g, (m, k) => vars[k] ?? m);
+}
+// For HTML: the text is escaped, and the vars must already be HTML.
+const tHtml = (key, vars = {}) => esc(t(key)).replace(/\{(\w+)\}/g, (m, k) => vars[k] ?? m);
+
+// Fills the texts in index.html (data-i18n, and data-i18n-aria-label / -placeholder).
+function applyLanguage() {
+  if (!hasI18n) { $('langBtn').hidden = true; return; }
+  document.documentElement.lang = HTML_LANG[uiLang];
+  document.title = t('title');
+  for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+  for (const attr of ['aria-label', 'placeholder']) {
+    for (const el of document.querySelectorAll(`[data-i18n-${attr}]`)) el.setAttribute(attr, t(el.getAttribute(`data-i18n-${attr}`)));
+  }
+  const other = OTHER_LANG[uiLang];
+  const b = $('langBtn');
+  // The button speaks the page's language; only its visible word is in the other one.
+  b.firstElementChild.textContent = SWITCH_TEXT[other];
+  b.firstElementChild.lang = HTML_LANG[other];
+  b.title = t('switchLang');
+  b.setAttribute('aria-label', b.title);
+}
+
+function switchLang() {
+  const url = new URL(location.href);
+  // Without working storage the choice travels in the address instead.
+  if (saveLang(OTHER_LANG[uiLang])) url.searchParams.delete('lang'); else url.searchParams.set('lang', OTHER_LANG[uiLang]);
+  location.assign(url);
+}
+
 const ICONS = {
   Japanese: '🍣', Chinese: '🥟', Korean: '🍲', Thai: '🍜', Vietnamese: '🍜', Indian: '🍛', Italian: '🍝',
   Mexican: '🌮', Pizza: '🍕', Burgers: '🍔', Barbecue: '🍖', Cafe: '☕', Drinks: '🧋', Bakery: '🥐',
@@ -31,13 +114,16 @@ const ICONS = {
   Dumpling: '🥟', Noodles: '🍜', 'Middle Eastern': '🥙', Mediterranean: '🫒', Greek: '🥙', French: '🥖', American: '🍔', 'Fast food': '🍟',
 };
 const iconFor = c => (Object.hasOwn(ICONS, c) ? ICONS[c] : '🍽️');
+// What a visitor reads for a stored food type; filtering keeps using the stored one.
+const foodLabel = c => (foodTypes[uiLang] && Object.hasOwn(foodTypes[uiLang], c) ? foodTypes[uiLang][c] : c);
+const byFood = (a, b) => foodLabel(a).localeCompare(foodLabel(b), uiLang);
 
-// Country names come from the browser, in English like the rest of the page.
+// Country names come from the browser, in the page's language.
 const NO_COUNTRY = '-';
 const countryOf = r => r.country || NO_COUNTRY;
-const countryNames = (() => { try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; } })();
+const countryNames = (() => { try { return new Intl.DisplayNames([uiLang], { type: 'region' }); } catch { return null; } })();
 const countryName = c => {
-  if (c === NO_COUNTRY) return 'Country unknown';
+  if (c === NO_COUNTRY) return t('countryUnknown');
   try { return countryNames?.of(c) || c; } catch { return c; }
 };
 
@@ -58,7 +144,7 @@ function ratingHtml(r) {
   if (r.rating == null || !Number.isFinite(rating)) return '';
   const count = Number.isFinite(Number(r.ratingCount)) && r.ratingCount != null ? Number(r.ratingCount) : null;
   const pct = Math.max(0, Math.min(100, rating / 5 * 100));
-  const label = `Google rating ${rating.toFixed(1)} out of 5${count != null ? `, ${count.toLocaleString()} reviews` : ''}`;
+  const label = t(count != null ? 'ratingLabelReviews' : 'ratingLabel', { rating: rating.toFixed(1), count: count?.toLocaleString(uiLang) });
   return `<a class="rating" href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener" aria-label="${esc(label)}" title="${esc(label)}">` +
     `<span class="rating-num">${rating.toFixed(1)}</span><span class="stars" style="--pct:${pct}%" aria-hidden="true">★★★★★</span>` +
     `${count != null ? `<span aria-hidden="true">(${count.toLocaleString()})</span>` : ''}</a>`;
@@ -107,7 +193,7 @@ function distanceKm(a, b) {
 }
 function formatDistance(km) {
   const mi = km * 0.621371;
-  return mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(mi < 10 ? 1 : 0)} mi`;
+  return mi < 0.1 ? t('ft', { n: Math.round(mi * 5280) }) : t('mi', { n: mi.toFixed(mi < 10 ? 1 : 0) });
 }
 
 function visible() {
@@ -129,10 +215,10 @@ function renderCountryOptions() {
   for (const r of state.restaurants) counts.set(countryOf(r), (counts.get(countryOf(r)) || 0) + 1);
   // The picked country has no restaurants left (archived, say): show all again.
   if (state.country && !counts.has(state.country)) { state.country = ''; setTimeout(fitToVisible); }
-  const codes = [...counts.keys()].sort((a, b) => (a === NO_COUNTRY) - (b === NO_COUNTRY) || countryName(a).localeCompare(countryName(b)));
+  const codes = [...counts.keys()].sort((a, b) => (a === NO_COUNTRY) - (b === NO_COUNTRY) || countryName(a).localeCompare(countryName(b), uiLang));
   const sel = $('countrySelect');
   $('countryWrap').hidden = codes.length < 2 && !state.country;
-  const html = `<option value="">All countries</option>` +
+  const html = `<option value="">${esc(t('allCountries'))}</option>` +
     codes.map(c => `<option value="${esc(c)}">${esc(countryName(c))} (${counts.get(c)})</option>`).join('');
   if (sel.innerHTML !== html) sel.innerHTML = html; // an open menu would close on a redraw
   sel.value = state.country;
@@ -153,10 +239,10 @@ function renderFilterOptions() {
     if (!state.restaurants.some(r => r.cuisine === c)) state.cuisines.delete(c);
     else if (!counts.has(c)) counts.set(c, 0);
   }
-  const names = [...counts.keys()].sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b));
-  const chip = n => `<button type="button" class="chip" data-cuisine="${esc(n)}" aria-pressed="${state.cuisines.has(n)}"><span aria-hidden="true">${iconFor(n)}</span> ${esc(n)}<span class="n" aria-hidden="true">${counts.get(n)}</span><span class="visually-hidden">, ${plural(counts.get(n), 'restaurant')}</span></button>`;
+  const names = [...counts.keys()].sort((a, b) => (a === 'Other') - (b === 'Other') || byFood(a, b));
+  const chip = n => `<button type="button" class="chip" data-cuisine="${esc(n)}" aria-pressed="${state.cuisines.has(n)}"><span aria-hidden="true">${iconFor(n)}</span> ${esc(foodLabel(n))}<span class="n" aria-hidden="true">${counts.get(n)}</span><span class="visually-hidden">${esc(t('restaurantCountSr', { n: counts.get(n) }))}</span></button>`;
   keepChipFocus($('filterChips'), () => {
-    $('filterChips').innerHTML = names.length ? names.map(chip).join('') : '<p class="hint">No restaurants yet.</p>';
+    $('filterChips').innerHTML = names.length ? names.map(chip).join('') : `<p class="hint">${esc(t('noRestaurantsYet'))}</p>`;
   });
   renderActiveFilters();
   // Suggestions when changing a food type in Manage, so typos don't create
@@ -172,12 +258,12 @@ function renderActiveFilters() {
   $('filterBadge').hidden = !n;
   $('filterBadge').textContent = n;
   $('filterBtn').classList.toggle('active', n > 0);
-  $('filterBtn').setAttribute('aria-label', n ? `Filter by food type, ${n} selected` : 'Filter by food type');
+  $('filterBtn').setAttribute('aria-label', n ? t('filterByTypeN', { n }) : t('filterByType'));
   $('filterClear').disabled = !n;
   const box = $('activeFilters');
   box.hidden = !n;
   keepChipFocus(box, () => {
-    box.innerHTML = [...state.cuisines].sort().map(c => `<button type="button" class="chip" data-cuisine="${esc(c)}" aria-label="Remove filter ${esc(c)}"><span aria-hidden="true">${iconFor(c)}</span> ${esc(c)} ✕</button>`).join('');
+    box.innerHTML = [...state.cuisines].sort(byFood).map(c => `<button type="button" class="chip" data-cuisine="${esc(c)}" aria-label="${esc(t('removeFilter', { type: foodLabel(c) }))}"><span aria-hidden="true">${iconFor(c)}</span> ${esc(foodLabel(c))} ✕</button>`).join('');
   });
 }
 
@@ -234,7 +320,7 @@ function syncSheet() {
   const app = document.querySelector('.app');
   app.classList.toggle('sheet-down', down);
   const h = $('sheetHandle');
-  h.setAttribute('aria-label', down ? 'Show list' : 'Show map');
+  h.setAttribute('aria-label', t(down ? 'showList' : 'showMap'));
   if (down) {
     const sel = document.querySelector('#list .card.selected');
     const list = $('list');
@@ -278,7 +364,7 @@ function initSheet() {
 function openSearch(open) {
   document.querySelector('.top').classList.toggle('searching', open);
   $('searchToggle').setAttribute('aria-expanded', open);
-  $('searchToggle').setAttribute('aria-label', open ? 'Close search' : 'Search');
+  $('searchToggle').setAttribute('aria-label', t(open ? 'closeSearch' : 'search'));
   if (open) { $('search').focus(); return; }
   if (state.search) { $('search').value = state.search = ''; renderList(); }
   syncSearchToggle();
@@ -290,9 +376,9 @@ function renderOrigin(note = '') {
   const el = $('origin');
   if (!state.origin) { el.textContent = ''; return; }
   if (state.origin.isUser) {
-    el.textContent = 'Sorted by distance from your location.';
+    el.textContent = t('sortedFromYou');
   } else {
-    el.innerHTML = `Sorted by distance from ${esc(state.origin.label)}. <button id="useLoc" type="button">Use my location</button>` +
+    el.innerHTML = tHtml('sortedFrom', { place: esc(state.origin.label), button: `<button id="useLoc" type="button">${esc(t('useMyLocation'))}</button>` }) +
       (note ? ` <span class="origin-note">${esc(note)}</span>` : '');
     $('useLoc').onclick = () => locateUser(true);
   }
@@ -314,17 +400,17 @@ function renderList() {
         <div>
           <button type="button" class="name card-main" data-act="select" aria-pressed="${selected}">${esc(r.name)}</button>
           ${ratingHtml(r) ? `<p class="meta">${ratingHtml(r)}</p>` : ''}
-          <p class="meta detail">${r.phone ? `📞 <a href="tel:${esc(String(r.phone).replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : '📞 Phone not available'}</p>
-          <p class="meta detail">📍 ${r.address ? esc(r.address) : 'Address not available'}</p>
+          <p class="meta detail">${r.phone ? `📞 <a href="tel:${esc(String(r.phone).replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : `📞 ${esc(t('phoneNA'))}`}</p>
+          <p class="meta detail">📍 ${r.address ? esc(r.address) : esc(t('addressNA'))}</p>
         </div>
         <div class="side">
           <span>${r.km != null ? formatDistance(r.km) : ''}<span class="chev" aria-hidden="true">▾</span></span>
-          <span class="tag">${esc(r.cuisine)}</span>
+          <span class="tag">${esc(foodLabel(r.cuisine))}</span>
         </div>
       </li>`;
-    }).join('') : `<li class="empty">${state.restaurants.length ? 'No restaurants match.' : 'No restaurants yet. Use “Manage” to add Google Maps links.'}</li>`;
+    }).join('') : `<li class="empty">${esc(t(state.restaurants.length ? 'noMatch' : 'emptyList'))}</li>`;
   });
-  const status = items.length === state.restaurants.length ? plural(items.length, 'restaurant') : `${items.length} of ${plural(state.restaurants.length, 'restaurant')} shown`;
+  const status = items.length === state.restaurants.length ? t('restaurantCount', { n: items.length }) : t('shownOf', { n: items.length, total: t('restaurantCount', { n: state.restaurants.length }) });
   if ($('listStatus').textContent !== status) $('listStatus').textContent = status;
   // Google's attribution, shown whenever a rating is on screen.
   $('ratingNote').hidden = !items.some(r => ratingHtml(r));
@@ -347,28 +433,26 @@ const MAP_LOAD_TIMEOUT_MS = 15000;
 function loadMap() {
   const key = state.config.browserKey;
   if (!key) {
-    showMapNotice('<div><b>Map not configured.</b><br>Set GOOGLE_MAPS_API_KEY in .env and restart the server.<br>The list on the left still works.</div>');
+    showMapNotice(`<div><b>${esc(t('mapOffTitle'))}</b><br>${esc(t('mapOffBody'))}<br>${esc(t('listStillWorks'))}</div>`);
     return;
   }
-  const failed = () => showMapNotice('<div>Could not load Google Maps. Check your connection, then reload the page.<br>The list on the left still works.</div>');
+  const failed = () => showMapNotice(`<div>${esc(t('mapFailed'))}<br>${esc(t('listStillWorks'))}</div>`);
   // If the script loads but never starts the map (blocked or empty), say so
   // instead of leaving a blank area.
   const timer = setTimeout(() => { if (!map.instance) failed(); }, MAP_LOAD_TIMEOUT_MS);
   window.gm_authFailure = () => {
     map.keyRejected = true;
-    showMapNotice(`<div><b>Google rejected the Maps API key.</b><br>
-    Check that billing and Maps JavaScript API are enabled, and that the key's Websites restriction includes
-    <code>${esc(location.origin)}</code>. The browser console (F12) names the exact error.</div>`);
+    showMapNotice(`<div><b>${esc(t('mapRejectedTitle'))}</b><br>${tHtml('mapRejectedBody', { origin: `<code>${esc(location.origin)}</code>` })}</div>`);
   };
   window.__initMap = () => {
     clearTimeout(timer);
     initMap().catch(err => {
       console.error(err);
-      showMapNotice(`<div><b>The map failed to start.</b><br>${esc(err.message)}</div>`);
+      showMapNotice(`<div><b>${esc(t('mapStartFailed'))}</b><br>${esc(err.message)}</div>`);
     });
   };
   const s = document.createElement('script');
-  s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=__initMap`;
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&language=${uiLang}&callback=__initMap`;
   s.async = true;
   s.onerror = () => { clearTimeout(timer); failed(); };
   document.head.appendChild(s);
@@ -537,7 +621,7 @@ function select(id, { fromMap = false, toggle = true } = {}) {
   document.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); // an expanded card near the bottom shows its details
   if (!map.instance || !r) return;
   map.instance.panTo(latLng(r));
-  map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
+  map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener">${esc(t('openInMaps'))}</a></p></div>`);
   map.info.setPosition(latLng(r));
   map.info.open({ map: map.instance, shouldFocus: false });
 }
@@ -550,7 +634,7 @@ function useOffice() {
 }
 
 function locateUser(explicit = false) {
-  if (!('geolocation' in navigator)) { if (explicit) renderOrigin('This browser can’t share its location.'); return; }
+  if (!('geolocation' in navigator)) { if (explicit) renderOrigin(t('locUnsupported')); return; }
   navigator.geolocation.getCurrentPosition(pos => {
     state.origin = { lat: pos.coords.latitude, lng: pos.coords.longitude, label: 'your location', isUser: true };
     renderAll();
@@ -558,7 +642,7 @@ function locateUser(explicit = false) {
     // a restaurant while the location was coming in.
     if (explicit || (!map.userMoved && !state.selectedId)) fitToVisible();
   }, err => {
-    if (explicit) renderOrigin(err.code === 1 ? 'Location permission was denied.' : 'Couldn’t get your location.');
+    if (explicit) renderOrigin(t(err.code === 1 ? 'locDenied' : 'locFailed'));
   }, { timeout: 10000, maximumAge: 300000 });
 }
 
@@ -1094,6 +1178,8 @@ function onListClick(e) {
 
 async function init() {
   const dlg = $('manageDialog');
+  applyLanguage();
+  $('langBtn').onclick = switchLang;
   $('manageBtn').onclick = () => openManage().catch(err => toast(err.message));
   $('manageClose').onclick = $('manageDone').onclick = () => dlg.close();
   // Clicking the dimmed backdrop closes the window; a drag that merely ends
@@ -1176,4 +1262,4 @@ async function init() {
   locateUser();
 }
 
-init().catch(err => { $('list').innerHTML = `<li class="empty">Could not load: ${esc(err.message)}</li>`; });
+init().catch(err => { $('list').innerHTML = `<li class="empty">${esc(t('loadFailed', { message: err.message }))}</li>`; });
