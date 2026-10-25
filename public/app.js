@@ -140,19 +140,28 @@ const safeUrl = u => (/^https:\/\//i.test(String(u ?? '')) ? String(u) : '#');
 const mapsHref = r => safeUrl(hasI18n ? localizedMapsUrl(r.mapsUrl, uiLang) : r.mapsUrl);
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-// ---- Chinese name and address of the opened restaurant -----------------------
+// ---- Chinese name and address of the restaurants opened ----------------------
 
 // Asked of our server (which asks Google) when a restaurant is opened, never
-// while the list is drawn. Kept in memory only, per restaurant and place ID:
-// 'pending' | { name, address, lang, attributions } | 'none' (Google had no
+// while the list is drawn. Once fetched it shows on that restaurant's card,
+// pin and search for the rest of the page visit. Kept in memory only (Google's
+// terms don't allow storing names and addresses), per restaurant and place ID,
+// and dropped an hour after it was fetched (renderList prunes, except for the
+// restaurant that is open, which keeps it until it is closed; opening it again
+// asks again):
+// 'pending' | { name, address, lang, attributions, at } | 'none' (Google had no
 // Chinese text for it, so the stored English stays). A failed or refused call
 // (network, 429, 5xx) is not remembered, so opening it again may retry.
 const placeCache = new Map();
 const ZH_LANG = 'zh-Hant-TW';
+const PLACE_TTL = 60 * 60 * 1000;
+let placeNoteHtml = '';
 const placeKey = r => `${r.id}|${r.placeId}`;
 
 async function loadPlace(r) {
   const key = placeKey(r);
+  const old = placeCache.get(key);
+  if (old && typeof old === 'object' && placeExpired(old)) placeCache.delete(key); // reopened: ask again
   if (uiLang !== 'zh-TW' || !state.config?.placeDetails || !r.placeId || placeCache.has(key)) return;
   placeCache.set(key, 'pending');
   let found = 'none';
@@ -167,23 +176,59 @@ async function loadPlace(r) {
           name: d.name, address: typeof d.address === 'string' && d.address ? d.address : null,
           lang: /^zh(-[A-Za-z0-9]{1,8})*$/i.test(d.nameLang) ? d.nameLang : ZH_LANG,
           attributions: Array.isArray(d.attributions) ? d.attributions.filter(a => a && typeof a.provider === 'string') : [],
+          at: Date.now(),
         };
       }
     }
   } catch { found = null; /* offline or failed: keep the stored English */ }
   if (found) placeCache.set(key, found); else placeCache.delete(key);
   // The list may have reloaded meanwhile: draw from the record as it is now.
+  // Another restaurant may be open by now; its card and pin still change.
   const cur = state.restaurants.find(x => x.id === r.id);
-  if (found === 'none' || !found || !cur || state.selectedId !== cur.id || placeKey(cur) !== key) return;
+  if (found === 'none' || !found || !cur || placeKey(cur) !== key) return;
+  // Cards grow or shrink. If the open one is on screen, a reply for it brings
+  // it fully into view (the notes below the list can cover it); otherwise the
+  // card the visitor is looking at stays where it is.
+  const list = $('list'), lb = list.getBoundingClientRect();
+  const cards = [...list.querySelectorAll('.card')];
+  const shown = c => { const b = c.getBoundingClientRect(); return b.bottom > lb.top && b.top < lb.bottom; };
+  const openCard = cards.find(c => c.classList.contains('selected'));
+  const openVisible = !!openCard && shown(openCard);
+  const anchor = openVisible ? openCard : cards.find(c => c.getBoundingClientRect().bottom > lb.top);
+  const anchorId = anchor?.dataset.id, anchorTop = anchor?.getBoundingClientRect().top;
   renderList();
-  if (map.instance) setInfo(cur);
+  const find = id => [...list.querySelectorAll('.card')].find(c => c.dataset.id === id);
+  if (state.selectedId === cur.id && openVisible) find(cur.id)?.scrollIntoView({ block: 'nearest' });
+  else if (anchorId) {
+    const delta = (find(anchorId)?.getBoundingClientRect().top ?? anchorTop) - anchorTop;
+    if (Math.abs(delta) >= 1) list.scrollTop += delta;
+  }
+  if (map.instance && state.selectedId === cur.id) setInfo(cur);
 }
 
-// What the opened restaurant shows: Google's Chinese text if we have it.
-const zhPlace = r => { const z = placeCache.get(placeKey(r)); return z && typeof z === 'object' ? z : null; };
+// What a restaurant shows once opened: Google's Chinese text if we have it.
+const placeExpired = z => Date.now() - z.at > PLACE_TTL;
+// An expired entry still shows for the open restaurant, so its card and info
+// window don't disagree; renderList drops it once it is closed.
+function zhPlace(r) {
+  const z = placeCache.get(placeKey(r));
+  return z && typeof z === 'object' && (r.id === state.selectedId || !placeExpired(z)) ? z : null;
+}
 const zhText = (s, z) => `<span lang="${esc(z.lang)}">${esc(s)}</span>`;
+
+// What a restaurant shows, for the card, pin, info window and search alike:
+// { name, nameEn (the stored English name when the shown one differs, else ''),
+// address, z (Google's Chinese text, or null) }.
+function display(r) {
+  const z = zhPlace(r);
+  return {
+    z, name: z ? z.name : r.name, address: z?.address || r.address,
+    nameEn: z && z.name.trim() !== String(r.name).trim() ? r.name : '',
+  };
+}
 // The stored English name stays as a small line unless the two are the same.
-const nameHtml = (r, z) => (z ? `${zhText(z.name, z)}${z.name.trim() === String(r.name).trim() ? '' : `<span class="name-en">${esc(r.name)}</span>`}` : esc(r.name));
+const nameHtml = d => (d.z ? `${zhText(d.name, d.z)}${d.nameEn ? `<span class="name-en">${esc(d.nameEn)}</span>` : ''}` : esc(d.name));
+const addressHtml = d => (d.z?.address ? zhText(d.address, d.z) : esc(d.address));
 
 // Replaces the info window's content; if a link in it had keyboard focus, the
 // same link gets it back.
@@ -197,12 +242,24 @@ function setInfo(r) {
   }
 }
 
+// The third-party credits Google sent along, as text or links.
+const attributionsHtml = list => list.map(a => (safeUrl(a.providerUri) === '#'
+  ? esc(a.provider) : `<a data-act="credit" href="${esc(safeUrl(a.providerUri))}" target="_blank" rel="noopener">${esc(a.provider)}</a>`));
+
 // "Google Maps" credit plus the third-party credits Google sent along.
-function creditHtml(z) {
-  const others = z.attributions.map(a => (safeUrl(a.providerUri) === '#'
-    ? esc(a.provider) : `<a href="${esc(safeUrl(a.providerUri))}" target="_blank" rel="noopener">${esc(a.provider)}</a>`));
-  return [esc(t('placeCredit')), ...others].join(' · ');
+const creditHtml = z => [esc(t('placeCredit')), ...attributionsHtml(z.attributions)].join(' · ');
+
+// The same for a whole list: one credit, plus each third party once.
+function listCreditHtml(zs) {
+  const seen = new Map();
+  for (const z of zs) for (const a of z.attributions) if (!seen.has(a.provider + '|' + a.providerUri)) seen.set(a.provider + '|' + a.providerUri, a);
+  return [esc(t('placeNote')), ...attributionsHtml([...seen.values()])].join(' · ');
 }
+
+// A pin's name: the Chinese one if we have it. The label stays in the page's
+// language (it can't carry lang); the hover title adds the English.
+const pinLabel = d => d.name;
+const pinTitle = d => (d.nameEn ? `${d.name} (${d.nameEn})` : d.name);
 
 // Google's star rating as five stars filled to the exact value, plus the
 // review count, linking to the place on Google Maps where the reviews are.
@@ -244,10 +301,12 @@ function keepFocus(root, render) {
   const inside = a && a !== root && root.contains(a);
   const id = inside ? a.closest('[data-id]')?.dataset.id : null;
   const act = inside ? a.dataset.act : null;
+  // Several controls can share an act (a card's credit links): keep which one.
+  const nth = inside ? [...(a.closest('[data-id]')?.querySelectorAll(`[data-act="${act}"]`) || [])].indexOf(a) : -1;
   render();
   if (!id) return;
   const row = root.querySelector(`[data-id="${CSS.escape(id)}"]`);
-  (row?.querySelector(`[data-act="${act}"]`) || row?.querySelector('button, input'))?.focus();
+  ([...row?.querySelectorAll(`[data-act="${act}"]`) || []][Math.max(nth, 0)] || row?.querySelector(`[data-act="${act}"]`) || row?.querySelector('button, input'))?.focus();
 }
 
 // ---- distance & filtering --------------------------------------------------
@@ -263,10 +322,15 @@ function formatDistance(km) {
   return mi < 0.1 ? t('ft', { n: Math.round(mi * 5280) }) : t('mi', { n: mi.toFixed(mi < 10 ? 1 : 0) });
 }
 
+// What the search box matches: the stored name, plus the Chinese name if the
+// restaurant has been opened on the Chinese page. Width, case and 臺/台 are ignored.
+const fold = s => String(s).normalize('NFKC').toLowerCase().replace(/臺/g, '台');
+const searchText = r => fold([r.name, zhPlace(r)?.name].filter(Boolean).join('\n'));
+
 function visible() {
-  const q = state.search.trim().toLowerCase();
+  const q = fold(state.search.trim());
   return state.restaurants
-    .filter(r => !q || r.name.toLowerCase().includes(q))
+    .filter(r => !q || searchText(r).includes(q))
     .filter(r => !state.cuisines.size || state.cuisines.has(r.cuisine))
     .filter(r => !state.country || countryOf(r) === state.country)
     .map(r => ({ ...r, km: state.origin ? distanceKm(state.origin, r) : null }))
@@ -452,6 +516,7 @@ function renderOrigin(note = '') {
 }
 
 function renderList() {
+  for (const [key, z] of placeCache) if (typeof z === 'object' && placeExpired(z) && !key.startsWith(`${state.selectedId}|`)) placeCache.delete(key);
   const items = visible();
   // A selected restaurant that the search or filter hides is deselected, so
   // its popup doesn't linger.
@@ -461,17 +526,16 @@ function renderList() {
   keepFocus(list, () => {
     list.innerHTML = items.length ? items.map(r => {
       const selected = r.id === state.selectedId;
-      const z = selected ? zhPlace(r) : null;
-      const address = z?.address || r.address;
+      const d = display(r);
       return `
       <li class="card${selected ? ' selected' : ''}" data-id="${esc(r.id)}">
         <div class="icon" aria-hidden="true">${iconFor(r.cuisine)}</div>
         <div>
-          <button type="button" class="name card-main" data-act="select" aria-pressed="${selected}">${nameHtml(r, z)}</button>
+          <button type="button" class="name card-main" data-act="select" aria-pressed="${selected}">${nameHtml(d)}</button>
           ${ratingHtml(r) ? `<p class="meta">${ratingHtml(r)}</p>` : ''}
           <p class="meta detail">${r.phone ? `📞 <a href="tel:${esc(String(r.phone).replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : `📞 ${esc(t('phoneNA'))}`}</p>
-          <p class="meta detail">📍 ${address ? (z?.address ? zhText(address, z) : esc(address)) : esc(t('addressNA'))}</p>
-          ${z ? `<p class="meta detail credit">${creditHtml(z)}</p>` : ''}
+          <p class="meta detail">📍 ${d.address ? addressHtml(d) : esc(t('addressNA'))}</p>
+          ${d.z ? `<p class="meta detail credit">${creditHtml(d.z)}</p>` : ''}
         </div>
         <div class="side">
           <span>${r.km != null ? formatDistance(r.km) : ''}<span class="chev" aria-hidden="true">▾</span></span>
@@ -484,6 +548,18 @@ function renderList() {
   if ($('listStatus').textContent !== status) $('listStatus').textContent = status;
   // Google's attribution, shown whenever a rating is on screen.
   $('ratingNote').hidden = !items.some(r => ratingHtml(r));
+  // Likewise for Chinese text: a collapsed card hides its own credit line.
+  const zs = items.map(zhPlace).filter(Boolean);
+  $('placeNote').hidden = !zs.length;
+  if (zs.length) {
+    const html = listCreditHtml(zs);
+    if (html !== placeNoteHtml) { // a rewrite would drop focus on its links: put it back on the same one
+      const href = document.activeElement?.closest('#placeNote') ? document.activeElement.getAttribute('href') : null;
+      $('placeNote').innerHTML = placeNoteHtml = html;
+      if (href) [...$('placeNote').querySelectorAll('a')].find(a => a.getAttribute('href') === href)?.focus();
+    }
+  }
+  $('notes').hidden = $('ratingNote').hidden && $('placeNote').hidden;
   renderMarkers(items);
   if (state.sheetDown) {
     syncSheet(); // the picked card or the filter chips changed the panel's height
@@ -610,7 +686,8 @@ function renderMarkers(items) {
     }
     // Details can change after "Update from Google": keep the pin in step.
     if (m.at !== `${r.lat},${r.lng}`) { m.at = `${r.lat},${r.lng}`; m.position = new map.api.LatLng(r.lat, r.lng); if (m.getMap()) m.draw(); }
-    if (m.el.title !== r.name) { m.el.title = r.name; m.el.setAttribute('aria-label', r.name); }
+    const d = display(r), title = pinTitle(d);
+    if (m.el.title !== title) { m.el.title = title; m.el.setAttribute('aria-label', pinLabel(d)); }
     if (!m.getMap()) m.setMap(map.instance);
     const selected = r.id === state.selectedId;
     m.el.querySelector('.pin-glyph').textContent = iconFor(r.cuisine);
@@ -681,9 +758,8 @@ function deselect() {
 }
 
 function infoHtml(r) {
-  const z = zhPlace(r);
-  const address = z?.address || r.address;
-  return `<div class="info"><h3>${nameHtml(r, z)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${address ? `<p>${z?.address ? zhText(address, z) : esc(address)}</p>` : ''}<p><a href="${esc(mapsHref(r))}" target="_blank" rel="noopener">${esc(t('openInMaps'))}</a></p>${z ? `<p class="credit">${creditHtml(z)}</p>` : ''}</div>`;
+  const d = display(r);
+  return `<div class="info"><h3>${nameHtml(d)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${d.address ? `<p>${addressHtml(d)}</p>` : ''}<p><a href="${esc(mapsHref(r))}" target="_blank" rel="noopener">${esc(t('openInMaps'))}</a></p>${d.z ? `<p class="credit">${creditHtml(d.z)}</p>` : ''}</div>`;
 }
 
 // Selecting the restaurant that's already selected clears it instead.

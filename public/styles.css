@@ -88,8 +88,8 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .card-main { display: block; border: 0; background: none; padding: 0; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
 .name-en { display: block; font-size: 12px; font-weight: 400; color: var(--muted); }
 .info .name-en { color: #4a5263; }
-.credit { font-size: 11px; color: var(--muted); } .credit a { color: inherit; }
-.info p.credit { font-size: 11px; }
+.credit { font-size: 12px; color: var(--muted); } .credit a { color: inherit; }
+.info p.credit { font-size: 12px; }
 .card-main:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 /* Pins sit on the map in either theme, so their ring is fixed: dark with a white gap. */
 .pin:focus-visible { outline: 3px solid #1d2330; outline-offset: 2px; box-shadow: 0 0 0 2px #fff; border-radius: 4px; }
@@ -136,7 +136,7 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
   .sheet-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   h1 { touch-action: none; }
   .app.sheet-down { grid-template-rows: calc(100% - min(var(--sheet-h, 120px), 75%)) minmax(0, 1fr); }
-  .sheet-down #origin, .sheet-down #ratingNote { display: none; }
+  .sheet-down #origin, .sheet-down #notes { display: none; }
   .sheet-down .list:not(:has(.card.selected)), .sheet-down .card:not(.selected) { display: none; }
   /* The toast would cover the header, so it sits above the panel. */
   body:has(.sheet-down) .toast { bottom: calc(min(var(--sheet-h, 120px), 75vh) + 12px); }
@@ -238,7 +238,9 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 /* Grey stars with a gold layer clipped to the rating. */
 .stars { position: relative; display: inline-block; color: color-mix(in srgb, var(--muted) 40%, transparent); letter-spacing: 1px; line-height: 1; }
 .stars::before { content: '★★★★★'; position: absolute; inset: 0; width: var(--pct); overflow: hidden; color: #f5a623; white-space: nowrap; }
-.rating-note { margin: 0; padding: 8px 16px 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+.notes { display: flex; flex-direction: column; gap: 4px; padding: 8px 16px 12px; border-top: 1px solid var(--border); }
+.notes[hidden] { display: none; }
+.rating-note { margin: 0; font-size: 12px; color: var(--muted); }
 .rating-note a { color: inherit; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .cuisine-input { width: 9em; padding: 2px 8px; font-size: 12px; border-radius: 999px; }
