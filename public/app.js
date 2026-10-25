@@ -8,6 +8,7 @@ const state = {
   origin: null,        // { lat, lng, label, isUser }
   search: '',
   cuisines: new Set(), // food types picked in the filter; empty shows all
+  country: '',         // two-letter code picked in the country menu, NO_COUNTRY, or '' for all
   selectedId: null,
   loggedIn: false,
   passwordSet: false,
@@ -30,7 +31,20 @@ const ICONS = {
 };
 const iconFor = c => (Object.hasOwn(ICONS, c) ? ICONS[c] : '🍽️');
 
+// Country names come from the browser, in English like the rest of the page.
+const NO_COUNTRY = '-';
+const countryOf = r => r.country || NO_COUNTRY;
+const countryNames = (() => { try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; } })();
+const countryName = c => {
+  if (c === NO_COUNTRY) return 'Country unknown';
+  try { return countryNames?.of(c) || c; } catch { return c; }
+};
+
 const $ = id => document.getElementById(id);
+// After a country pick the list follows at once, but the map waits a moment,
+// so stepping through the menu with the arrow keys doesn't fly it through
+// every country. Anything else that moves the map cancels the wait.
+let countryFit;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // Links we render must be https; anything else (javascript:, data:) becomes inert.
 const safeUrl = u => (/^https:\/\//i.test(String(u ?? '')) ? String(u) : '#');
@@ -100,17 +114,43 @@ function visible() {
   return state.restaurants
     .filter(r => !q || r.name.toLowerCase().includes(q))
     .filter(r => !state.cuisines.size || state.cuisines.has(r.cuisine))
+    .filter(r => !state.country || countryOf(r) === state.country)
     .map(r => ({ ...r, km: state.origin ? distanceKm(state.origin, r) : null }))
     .sort((a, b) => (a.km ?? 0) - (b.km ?? 0) || a.name.localeCompare(b.name));
 }
 
 // ---- rendering -------------------------------------------------------------
 
-function renderFilterOptions() {
+// The country menu lists the countries that have restaurants, with counts.
+// It is hidden while every restaurant is in one country.
+function renderCountryOptions() {
   const counts = new Map();
-  for (const r of state.restaurants) counts.set(r.cuisine, (counts.get(r.cuisine) || 0) + 1);
+  for (const r of state.restaurants) counts.set(countryOf(r), (counts.get(countryOf(r)) || 0) + 1);
+  // The picked country has no restaurants left (archived, say): show all again.
+  if (state.country && !counts.has(state.country)) { state.country = ''; setTimeout(fitToVisible); }
+  const codes = [...counts.keys()].sort((a, b) => (a === NO_COUNTRY) - (b === NO_COUNTRY) || countryName(a).localeCompare(countryName(b)));
+  const sel = $('countrySelect');
+  sel.hidden = codes.length < 2 && !state.country;
+  const html = `<option value="">All countries</option>` +
+    codes.map(c => `<option value="${esc(c)}">${esc(countryName(c))} (${counts.get(c)})</option>`).join('');
+  if (sel.innerHTML !== html) sel.innerHTML = html; // an open menu would close on a redraw
+  sel.value = state.country;
+  sel.classList.toggle('active', !!state.country);
+}
+
+function renderFilterOptions() {
+  renderCountryOptions();
+  // Counts are for the picked country. A picked type stays listed (with 0)
+  // until no restaurant anywhere has it.
+  const counts = new Map();
+  for (const r of state.restaurants) {
+    if (!state.country || countryOf(r) === state.country) counts.set(r.cuisine, (counts.get(r.cuisine) || 0) + 1);
+  }
+  for (const c of state.cuisines) {
+    if (!state.restaurants.some(r => r.cuisine === c)) state.cuisines.delete(c);
+    else if (!counts.has(c)) counts.set(c, 0);
+  }
   const names = [...counts.keys()].sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b));
-  for (const c of state.cuisines) if (!counts.has(c)) state.cuisines.delete(c);
   const chip = n => `<button type="button" class="chip" data-cuisine="${esc(n)}" aria-pressed="${state.cuisines.has(n)}"><span aria-hidden="true">${iconFor(n)}</span> ${esc(n)}<span class="n" aria-hidden="true">${counts.get(n)}</span><span class="visually-hidden">, ${plural(counts.get(n), 'restaurant')}</span></button>`;
   keepChipFocus($('filterChips'), () => {
     $('filterChips').innerHTML = names.length ? names.map(chip).join('') : '<p class="hint">No restaurants yet.</p>';
@@ -118,7 +158,7 @@ function renderFilterOptions() {
   renderActiveFilters();
   // Suggestions when changing a food type in Manage, so typos don't create
   // a new category.
-  const known = new Set([...names, ...Object.keys(ICONS)]);
+  const known = new Set([...state.restaurants.map(r => r.cuisine), ...Object.keys(ICONS)]);
   $('cuisineOptions').innerHTML = [...known].sort().map(n => `<option value="${esc(n)}"></option>`).join('');
 }
 
@@ -146,6 +186,7 @@ function keepChipFocus(root, render) {
 }
 
 function setFilter(change) {
+  clearTimeout(countryFit);
   change();
   renderFilterOptions();
   renderList();
@@ -153,9 +194,17 @@ function setFilter(change) {
 }
 
 function toggleFilterPanel(open = $('filterPanel').hidden) {
-  $('filterPanel').hidden = !open;
+  const panel = $('filterPanel');
+  panel.hidden = !open;
   $('filterBtn').setAttribute('aria-expanded', open);
-  if (open) $('filterChips').querySelector('.chip')?.focus();
+  if (!open) return;
+  // Stop above the bottom of the screen (on a phone the list starts halfway down).
+  fitFilterPanel();
+  $('filterChips').querySelector('.chip')?.focus();
+}
+function fitFilterPanel() {
+  const panel = $('filterPanel');
+  if (!panel.hidden) panel.style.maxHeight = `${Math.max(120, Math.min(innerHeight * 0.6, innerHeight - panel.getBoundingClientRect().top - 12))}px`;
 }
 
 function renderOrigin(note = '') {
@@ -257,6 +306,7 @@ async function initMap() {
   map.PinOverlay = makePinOverlay(OverlayView);
   map.instance = new Map($('map'), {
     center: latLng(state.origin || state.config.office), zoom: 12,
+    gestureHandling: 'greedy', // one finger moves the map on phones, and the wheel zooms without Ctrl
     ...(state.config.mapId ? { mapId: state.config.mapId } : { styles: QUIET_STYLE }),
     clickableIcons: false, mapTypeControl: false, streetViewControl: false,
   });
@@ -356,7 +406,8 @@ function fitToVisible(also = []) {
   const items = visible();
   const within = (o, km) => items.filter(r => distanceKm(o, r) <= km);
   let centre = null, points = [];
-  for (const o of [state.origin, state.config.office]) {
+  // A picked country is shown whole; otherwise the nearby restaurants.
+  for (const o of state.country ? [] : [state.origin, state.config.office]) {
     if (!o) continue;
     const close = within(o, VIEW_KM);
     const near = close.length ? close : within(o, NEARBY_KM);
@@ -394,6 +445,7 @@ function deselect() {
 function select(id, { fromMap = false, toggle = true } = {}) {
   if (toggle && state.selectedId === id) { deselect(); return; }
   state.selectedId = id;
+  clearTimeout(countryFit);
   map.userMoved = true; // the map moves to it; don't take that away later
   const r = state.restaurants.find(x => x.id === id);
   renderList();
@@ -989,6 +1041,13 @@ async function init() {
   $('editPane').onclick = e => onEditClick(e);
   $('search').oninput = e => { state.search = e.target.value; renderList(); };
   $('filterBtn').onclick = () => toggleFilterPanel();
+  $('countrySelect').onchange = e => {
+    state.country = e.target.value;
+    renderFilterOptions();
+    renderList();
+    clearTimeout(countryFit);
+    countryFit = setTimeout(fitToVisible, 300);
+  };
   $('filterChips').onclick = e => {
     const c = e.target.closest('[data-cuisine]')?.dataset.cuisine;
     if (c != null) setFilter(() => (state.cuisines.has(c) ? state.cuisines.delete(c) : state.cuisines.add(c)));
@@ -1010,6 +1069,7 @@ async function init() {
     if (!$('filterPanel').hidden && !e.target.closest('#filterPanel, #filterBtn')) toggleFilterPanel(false);
   });
   $('list').onclick = onListClick;
+  addEventListener('resize', fitFilterPanel); // e.g. a phone turned sideways
   // Escape closes the filter panel if it's open, else clears the selection.
   document.addEventListener('keydown', e => {
     // preventDefault: otherwise this same Escape also closes the reopened Manage window.

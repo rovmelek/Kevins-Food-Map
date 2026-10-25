@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { extractMapsLinks, findLinks, isFoodPlace, parseMapsUrl, deriveCuisine, classifyUrl } = require('../lib/parse');
+const { extractMapsLinks, findLinks, isFoodPlace, parseMapsUrl, deriveCuisine, classifyUrl, countryFromAddress, countryFromComponents } = require('../lib/parse');
 const { resolveLink, expandShortLink } = require('../lib/resolve');
 const auth = require('../lib/auth');
 
@@ -61,6 +61,39 @@ test('derives food type from Places types, then the name', () => {
   assert.strictEqual(deriveCuisine(['basque_restaurant'], 'Zazpi'), 'Basque');
 });
 
+test("finds the country in Google's address, first or last, in English or CJK", () => {
+  const cases = {
+    '13511 SE 3rd Way, Vancouver, WA 98684, USA': 'US',
+    '1588 Robson St, Vancouver, BC V6G 2G5, Canada': 'CA',
+    'No. 7號, Tianmu E Rd, Tianshan Village, Shilin District, Taipei City, Taiwan 111': 'TW',
+    '111, Taiwan, Taipei City, Shilin District, Tianfu Village, Section 2, Zhongcheng Rd, 200號B棟 3F': 'TW',
+    'Japan, 〒104-0061 Tokyo, Chuo City, Ginza, 6-chōme−10−１ 4F': 'JP',
+    '542 Ebisunochō, Shimogyo Ward, Kyoto, 600-8033, Japan': 'JP',
+    'Oststraße 55, 40211 Düsseldorf, Germany': 'DE', // not the retired DD
+    'Herrengasse 14, 1010 Wien, Austria': 'AT',
+    '12 Phố Hàng Bạc, Hà Nội, Vietnam': 'VN',
+    '1 Infinite Loop, Cupertino, CA 95014, United States': 'US',
+    '日本、〒100-0005 東京都千代田区丸の内1丁目': 'JP',
+    '100台灣台北市中正區忠孝東路一段108號': 'TW',
+    '123 Main St, Springfield': null,
+    // A US state or city named like a country, without "USA" at the end.
+    'Lebanon, OR 97355': null,
+    'Mexico, MO 65265': null,
+    // A place name that is also a country's Chinese name.
+    '黑山县城关镇': null,
+    'Taipei, Taiwan, ROC': 'TW',
+    'Kowloon, Hong Kong SAR': 'HK',
+    "Abidjan, Côte d'Ivoire": 'CI',
+    'Istanbul, Turkey': 'TR',
+    '': null,
+  };
+  for (const [a, code] of Object.entries(cases)) assert.strictEqual(countryFromAddress(a), code, a);
+  assert.strictEqual(countryFromAddress(null), null);
+  assert.strictEqual(countryFromComponents([{ types: ['locality'], shortText: 'Taipei' }, { types: ['country', 'political'], shortText: 'tw' }]), 'TW');
+  assert.strictEqual(countryFromComponents(undefined), null);
+  assert.strictEqual(countryFromComponents([{ types: ['country'], shortText: 'Taiwan' }]), null);
+});
+
 test('expands the short link with a manual redirect and stays on Google hosts', async () => {
   const f = fakeFetch(u => u === SHORT ? { status: 302, headers: { location: LONG } } : null);
   assert.strictEqual(await expandShortLink(SHORT, f), LONG);
@@ -85,18 +118,19 @@ test('enriches from Places and ignores a same-named place far away', async () =>
     id: 'ChIJtest', displayName: { text: 'Szechuan Brothers' }, formattedAddress: '123 Main St, Vancouver, WA',
     nationalPhoneNumber: '(360) 555-0100', location: { latitude: lat, longitude: -122.5346 },
     types: ['chinese_restaurant', 'restaurant'], googleMapsUri: 'https://maps.google.com/?cid=1', rating: 4.6, userRatingCount: 312,
+    addressComponents: [{ longText: 'United States', shortText: 'US', types: ['country', 'political'] }],
   }] });
   let lat = 45.61765;
   const f = fakeFetch((u, o) => {
     if (u === SHORT) return { status: 302, headers: { location: LONG } };
     if (u.startsWith('https://places.googleapis.com/')) {
       assert.strictEqual(o.headers['X-Goog-Api-Key'], 'k');
-      assert.ok(['places.nationalPhoneNumber', 'places.rating', 'places.userRatingCount'].every(f => o.headers['X-Goog-FieldMask'].includes(f)));
+      assert.ok(['places.nationalPhoneNumber', 'places.rating', 'places.userRatingCount', 'places.addressComponents'].every(f => o.headers['X-Goog-FieldMask'].includes(f)));
       return { status: 200, body: placesBody(lat) };
     }
   });
   const r = await resolveLink(SHORT, { apiKey: 'k', fetchImpl: f });
-  assert.deepStrictEqual([r.enriched, r.phone, r.placeId, r.cuisine, r.rating, r.ratingCount], [true, '(360) 555-0100', 'ChIJtest', 'Chinese', 4.6, 312]);
+  assert.deepStrictEqual([r.enriched, r.phone, r.placeId, r.cuisine, r.rating, r.ratingCount, r.country], [true, '(360) 555-0100', 'ChIJtest', 'Chinese', 4.6, 312, 'US']);
 
   lat = 47.6; // Seattle, ~220 km away: not the place in the link
   await assert.rejects(resolveLink(SHORT, { apiKey: 'k', fetchImpl: f }), /Google has no place called "Szechuan Brothers Chinese Restaurant"/);
@@ -175,6 +209,12 @@ test('HTTP API: add (bulk), dedupe, edit, archive, restore, purge, persistence',
     assert.strictEqual(sr, 200);
     assert.strictEqual(refreshed.restaurant.cuisine, 'Noodles', 'manual food type survives a refresh');
     assert.match(refreshed.warning, /No Places API key/);
+    // Without a stored country, the list takes it from the address; a refresh
+    // that finds none keeps it.
+    assert.strictEqual(pho.country, null);
+    await j(`/api/restaurants/${pho.id}`, { method: 'PATCH', body: JSON.stringify({ address: '4-chōme-5-7 Ginza, Chuo City, Tokyo 104-0061, Japan' }) });
+    assert.strictEqual((await j('/api/restaurants'))[1].find(r => r.id === pho.id).country, 'JP');
+    assert.strictEqual((await j(`/api/restaurants/${pho.id}/refresh`, { method: 'POST' }))[1].restaurant.country, 'JP');
     const disk = async () => { await new Promise(r => setTimeout(r, 50)); return JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')); };
     // DELETE archives: gone from the public list, still in the file.
     await j(`/api/restaurants/${list[0].id}`, { method: 'DELETE' });
@@ -217,6 +257,32 @@ test('HTTP API: add (bulk), dedupe, edit, archive, restore, purge, persistence',
     assert.notStrictEqual(trav.status, 200);
     const page = await fetch(base + '/');
     assert.match(await page.text(), /Kevin's Food Map/);
+  } finally {
+    srv.close();
+  }
+});
+
+test('updating from Google keeps a stored country when the lookup has none', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'foodmap-'));
+  process.env.DATA_FILE = path.join(dir, 'r.json');
+  fs.writeFileSync(process.env.DATA_FILE, JSON.stringify([{ id: 'r1', name: 'Szechuan Brothers', lat: 45.6176, lng: -122.5347, cuisine: 'Chinese',
+    address: '1 Nowhere Rd', addressManual: true, country: 'JP', sourceUrl: LONG, mapsUrl: 'https://maps.google.com/?cid=1', addedAt: '2026-10-01T00:00:00Z' }]));
+  for (const k of ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY']) delete process.env[k];
+  process.env.ADMIN_PASSWORD_HASH = await auth.hashPassword('test password 123');
+  auth.clearFailures('127.0.0.1');
+  delete require.cache[require.resolve('../server')];
+  const { createServer, loadStore } = require('../server');
+  loadStore();
+  const srv = createServer().listen(0);
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'test password 123' }) });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const r = await fetch(base + '/api/restaurants/r1/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual((await r.json()).restaurant.country, 'JP');
+    await new Promise(res => setTimeout(res, 50));
+    assert.strictEqual(JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8'))[0].country, 'JP');
   } finally {
     srv.close();
   }

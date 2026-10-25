@@ -6,7 +6,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { findLinks } = require('./lib/parse');
+const { findLinks, countryFromAddress } = require('./lib/parse');
 const { resolveLink } = require('./lib/resolve');
 const { createStore } = require('./lib/store');
 const { createSettings } = require('./lib/settings');
@@ -112,6 +112,8 @@ function findDuplicate(rec) {
 // Archived restaurants stay in the file (with archivedAt) so they can be
 // restored; only the Manage window sees them.
 const active = () => store.items.filter(r => !r.archivedAt);
+// Restaurants saved before countries were stored get theirs from the address.
+const withCountry = r => (r.country ? r : { ...r, country: countryFromAddress(r.address) });
 const archived = () => store.items.filter(r => r.archivedAt);
 
 async function addFromLink(url) {
@@ -334,7 +336,8 @@ async function refreshRestaurant(req, res, { id }) {
   if (r.cuisineManual) delete data.cuisine;
   if (r.phoneManual) delete data.phone;
   if (r.addressManual) delete data.address;
-  return send(res, 200, { restaurant: await replaceRestaurant(r, { ...r, ...data }), warning });
+  if (!data.country) delete data.country; // keep the one we had
+  return send(res, 200, { restaurant: withCountry(await replaceRestaurant(r, { ...r, ...data })), warning });
 }
 
 async function editRestaurant(req, res, { id }) {
@@ -361,7 +364,7 @@ const ROUTES = [
   ['GET', '/api/auth/session', (req, res) => send(res, 200, { passwordSet: !!PASSWORD_HASH, loggedIn: isLoggedIn(req) }), false],
   ['POST', '/api/auth/login', login, false],
   ['POST', '/api/auth/logout', logout, false],
-  ['GET', '/api/restaurants', (req, res) => send(res, 200, active()), false],
+  ['GET', '/api/restaurants', (req, res) => send(res, 200, active().map(withCountry)), false],
   ['POST', '/api/restaurants', addRestaurants, true],
   ['GET', '/api/restaurants/archived', (req, res) => send(res, 200, archived()), true],
   ['POST', '/api/restaurants/(?<action>archive|restore|purge)', bulkChange, true],

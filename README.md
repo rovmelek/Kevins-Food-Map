@@ -59,6 +59,10 @@ The office and the map style can also be changed in **Manage → Settings** (see
 
 Anyone can view the list and the map. The map opens centred on the visitor (or on the office, when the visitor doesn't share their location or has no listed restaurant within 40 km), zoomed to show the restaurants within 20 km (or 40 km, if none are that close); restaurants much farther away, in other cities or countries, are on the map but outside that first view. Choosing food types in **Filter** moves the map to the matching restaurants, again preferring nearby ones.
 
+The **country** menu (shown once restaurants are in more than one country) lists each country with its number of restaurants. Picking one shows only that country's restaurants in the list and on the map, and moves the map to show all of them; **Filter** then counts food types in that country. "All countries" goes back to the nearby view.
+
+The map moves with one finger on a phone and zooms with the mouse wheel on a computer, without the "use two fingers" or "use Ctrl + scroll" prompts. On a phone held upright, the map takes the top of the screen and the list the rest, and the list scrolls on its own; held sideways, the list and the map sit side by side.
+
 **Manage** asks for the admin password and has three tabs:
 
 - **Add:** paste one Google Maps link, or a bulk paste of Markdown or plain text with any number of links (up to 100 at once). Each link gets its own result: added, already listed, restored from the archive, skipped (another kind of link in the paste) or refused with the reason. A paste with no Google Maps links at all is refused. Duplicates are never added twice; see [How a link becomes a restaurant](#how-a-link-becomes-a-restaurant).
@@ -641,7 +645,8 @@ Browser (public/)                      Server (server.js, lib/)                 
 3. With a Places key, the server searches Places for that name near the pin and keeps the result only if it is within 300 m, so a same-named place elsewhere is never picked. It must also have a food-and-drink type (any `*_restaurant`, cafe, bakery, bar and the like; the list is `FOOD_TYPES` in `lib/parse.js`), so a grocery store or a gas station is refused. If Google can't be reached, the link fails and can be retried; it is never added unchecked.
 4. Without a Places key, only the link itself is checked, and the restaurant gets the name and pin from it with no phone or address. The result says so; **Update from Google** fills in the rest once a key works.
 5. The food type comes from the Places type (`chinese_restaurant` becomes Chinese), otherwise from words in the name (Szechuan, sushi, pho and so on).
-6. **Duplicates.** A link already in the list, the same Google place ID, the same Google CID, or the same name (ignoring case) within about 50 m counts as the same restaurant. The same link twice in one paste is processed once. A duplicate is reported as "Already listed", and an archived one is restored instead of added again.
+6. The country is Google's country code from the place's address details. For a restaurant without a stored country (for example one added without a Places key), the list reads the country from its address instead (`countryFromAddress` in `lib/parse.js`), which handles Google's English and Chinese or Japanese address orders. One with no recognisable country is listed under "Country unknown".
+7. **Duplicates.** A link already in the list, the same Google place ID, the same Google CID, or the same name (ignoring case) within about 50 m counts as the same restaurant. The same link twice in one paste is processed once. A duplicate is reported as "Already listed", and an archived one is restored instead of added again.
 
 ### Data model
 
@@ -654,7 +659,7 @@ Browser (public/)                      Server (server.js, lib/)                 
   "lat": 45.6176, "lng": -122.5347,
   "cuisine": "Chinese", "cuisineManual": false,
   "types": ["chinese_restaurant", "restaurant"],
-  "phone": "(360) 555-0100", "address": "…", "website": "https://…",
+  "phone": "(360) 555-0100", "address": "…", "country": "US", "website": "https://…",
   "rating": 4.5, "ratingCount": 320,
   "placeId": "…", "cid": "…", "featureId": "…",
   "mapsUrl": "https://maps.google.com/?cid=…",
@@ -665,7 +670,7 @@ Browser (public/)                      Server (server.js, lib/)                 
 }
 ```
 
-`archivedAt` is only present on archived restaurants. `enriched` is true once Places details were fetched. `phoneManual` and `addressManual` mark values edited by hand.
+`archivedAt` is only present on archived restaurants. `enriched` is true once Places details were fetched. `phoneManual` and `addressManual` mark values edited by hand. `country` is a two-letter ISO 3166 code, or missing or `null` when Google didn't give one.
 
 `data/settings.json` is an object with at most `office` (`{ name, lat, lng }`) and `mapId` (a string; `""` means the built-in style). A missing key means "use the `.env` value".
 
@@ -676,7 +681,7 @@ All responses are JSON; errors are `{ "error": "…" }` with a status code (400 
 | Method and path | Login | Purpose |
 | --- | --- | --- |
 | `GET /api/config` | | Browser key, map ID, office, whether Places is enabled. |
-| `GET /api/restaurants` | | Listed (not archived) restaurants. |
+| `GET /api/restaurants` | | Listed (not archived) restaurants. A missing `country` is filled in from the address. |
 | `GET /api/auth/session` | | Whether a password is set and whether you are logged in. |
 | `POST /api/auth/login`, `POST /api/auth/logout` | | `{ "password": "…" }` / end the session. |
 | `POST /api/restaurants` | login | Add from `{ "text": "…" }` (one or more links) or `{ "url": "…" }`. |
