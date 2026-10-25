@@ -23,6 +23,7 @@ A setting stays in `.env` for one of three reasons:
 | `HOST` | **No** | `0.0.0.0` exposes the server to the network, and a wrong value makes the page unreachable. Needs a restart. |
 | `PORT` | **No** | Same lockout problem; needs a restart, and the reverse proxy must change with it. |
 | `TRUST_PROXY` | **No, never** | Turned on without a real proxy, anyone can fake their address and the `https` flag in headers: a guesser dodges the lockout with a new fake address on each try, can lock out someone else's address, and can affect the cookie's `Secure` flag. It describes the server's network, which the page can't check. |
+| `PLACE_DETAILS_PER_DAY` | **No, never** | It limits spending on Google lookups; a control on the page could remove the cap. |
 | `DATA_FILE` | **No, never** | It decides which file the server reads and writes; from the web that would be "write a file somewhere". |
 
 The browser key, the map ID and the office are visible to anyone who opens the site, so showing them in Settings reveals nothing new.

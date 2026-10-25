@@ -42,7 +42,7 @@ const messages = hasI18n ? MESSAGES : {
     phoneNA: 'Phone not available', addressNA: 'Address not available', sortedFromYou: 'Sorted by distance from your location.',
     sortedFrom: 'Sorted by distance from {place}. {button}', useMyLocation: 'Use my location', ft: '{n} ft', mi: '{n} mi',
     ratingLabel: 'Google rating {rating} out of 5', ratingLabelReviews: 'Google rating {rating} out of 5, {count} reviews',
-    openInMaps: 'Open in Google Maps', loadFailed: 'Could not load: {message}',
+    openInMaps: 'Open in Google Maps', placeCredit: 'Name and address from Google Maps', loadFailed: 'Could not load: {message}',
     filterByType: 'Filter by food type', filterByTypeN: 'Filter by food type, {n} selected', removeFilter: 'Remove filter {type}',
     showMap: 'Show map', showList: 'Show list', search: 'Search', closeSearch: 'Close search',
     locUnsupported: 'This browser can’t share its location.', locDenied: 'Location permission was denied.', locFailed: 'Couldn’t get your location.',
@@ -135,7 +135,74 @@ let countryFit;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // Links we render must be https; anything else (javascript:, data:) becomes inert.
 const safeUrl = u => (/^https:\/\//i.test(String(u ?? '')) ? String(u) : '#');
+// The Google Maps link, opened in the page's language where Google honours it
+// (i18n.js); falls back to the stored link if that file didn't load.
+const mapsHref = r => safeUrl(hasI18n ? localizedMapsUrl(r.mapsUrl, uiLang) : r.mapsUrl);
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// ---- Chinese name and address of the opened restaurant -----------------------
+
+// Asked of our server (which asks Google) when a restaurant is opened, never
+// while the list is drawn. Kept in memory only, per restaurant and place ID:
+// 'pending' | { name, address, lang, attributions } | 'none' (Google had no
+// Chinese text for it, so the stored English stays). A failed or refused call
+// (network, 429, 5xx) is not remembered, so opening it again may retry.
+const placeCache = new Map();
+const ZH_LANG = 'zh-Hant-TW';
+const placeKey = r => `${r.id}|${r.placeId}`;
+
+async function loadPlace(r) {
+  const key = placeKey(r);
+  if (uiLang !== 'zh-TW' || !state.config?.placeDetails || !r.placeId || placeCache.has(key)) return;
+  placeCache.set(key, 'pending');
+  let found = 'none';
+  try {
+    const res = await fetch(`/api/place/${encodeURIComponent(r.id)}?lang=zh-TW`);
+    if (res.status === 429 || res.status >= 500) found = null;
+    else if (res.ok) {
+      const d = await res.json();
+      // Google answers with the closest match when it has no Chinese name.
+      if (d && typeof d.name === 'string' && d.name && /^zh/i.test(d.nameLang || '')) {
+        found = {
+          name: d.name, address: typeof d.address === 'string' && d.address ? d.address : null,
+          lang: /^zh(-[A-Za-z0-9]{1,8})*$/i.test(d.nameLang) ? d.nameLang : ZH_LANG,
+          attributions: Array.isArray(d.attributions) ? d.attributions.filter(a => a && typeof a.provider === 'string') : [],
+        };
+      }
+    }
+  } catch { found = null; /* offline or failed: keep the stored English */ }
+  if (found) placeCache.set(key, found); else placeCache.delete(key);
+  // The list may have reloaded meanwhile: draw from the record as it is now.
+  const cur = state.restaurants.find(x => x.id === r.id);
+  if (found === 'none' || !found || !cur || state.selectedId !== cur.id || placeKey(cur) !== key) return;
+  renderList();
+  if (map.instance) setInfo(cur);
+}
+
+// What the opened restaurant shows: Google's Chinese text if we have it.
+const zhPlace = r => { const z = placeCache.get(placeKey(r)); return z && typeof z === 'object' ? z : null; };
+const zhText = (s, z) => `<span lang="${esc(z.lang)}">${esc(s)}</span>`;
+// The stored English name stays as a small line unless the two are the same.
+const nameHtml = (r, z) => (z ? `${zhText(z.name, z)}${z.name.trim() === String(r.name).trim() ? '' : `<span class="name-en">${esc(r.name)}</span>`}` : esc(r.name));
+
+// Replaces the info window's content; if a link in it had keyboard focus, the
+// same link gets it back.
+function setInfo(r) {
+  const was = document.activeElement?.closest('.info') ? [...document.querySelectorAll('.info a')].indexOf(document.activeElement) : -1;
+  map.info.setContent(infoHtml(r));
+  if (was >= 0) {
+    const refocus = () => { if (!document.activeElement?.closest('.info')) document.querySelectorAll('.info a')[was]?.focus(); };
+    refocus();
+    requestAnimationFrame(refocus); // the real InfoWindow may swap its content a moment later
+  }
+}
+
+// "Google Maps" credit plus the third-party credits Google sent along.
+function creditHtml(z) {
+  const others = z.attributions.map(a => (safeUrl(a.providerUri) === '#'
+    ? esc(a.provider) : `<a href="${esc(safeUrl(a.providerUri))}" target="_blank" rel="noopener">${esc(a.provider)}</a>`));
+  return [esc(t('placeCredit')), ...others].join(' · ');
+}
 
 // Google's star rating as five stars filled to the exact value, plus the
 // review count, linking to the place on Google Maps where the reviews are.
@@ -145,7 +212,7 @@ function ratingHtml(r) {
   const count = Number.isFinite(Number(r.ratingCount)) && r.ratingCount != null ? Number(r.ratingCount) : null;
   const pct = Math.max(0, Math.min(100, rating / 5 * 100));
   const label = t(count != null ? 'ratingLabelReviews' : 'ratingLabel', { rating: rating.toFixed(1), count: count?.toLocaleString(uiLang) });
-  return `<a class="rating" href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener" aria-label="${esc(label)}" title="${esc(label)}">` +
+  return `<a class="rating" href="${esc(mapsHref(r))}" target="_blank" rel="noopener" aria-label="${esc(label)}" title="${esc(label)}">` +
     `<span class="rating-num">${rating.toFixed(1)}</span><span class="stars" style="--pct:${pct}%" aria-hidden="true">★★★★★</span>` +
     `${count != null ? `<span aria-hidden="true">(${count.toLocaleString()})</span>` : ''}</a>`;
 }
@@ -394,14 +461,17 @@ function renderList() {
   keepFocus(list, () => {
     list.innerHTML = items.length ? items.map(r => {
       const selected = r.id === state.selectedId;
+      const z = selected ? zhPlace(r) : null;
+      const address = z?.address || r.address;
       return `
       <li class="card${selected ? ' selected' : ''}" data-id="${esc(r.id)}">
         <div class="icon" aria-hidden="true">${iconFor(r.cuisine)}</div>
         <div>
-          <button type="button" class="name card-main" data-act="select" aria-pressed="${selected}">${esc(r.name)}</button>
+          <button type="button" class="name card-main" data-act="select" aria-pressed="${selected}">${nameHtml(r, z)}</button>
           ${ratingHtml(r) ? `<p class="meta">${ratingHtml(r)}</p>` : ''}
           <p class="meta detail">${r.phone ? `📞 <a href="tel:${esc(String(r.phone).replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : `📞 ${esc(t('phoneNA'))}`}</p>
-          <p class="meta detail">📍 ${r.address ? esc(r.address) : esc(t('addressNA'))}</p>
+          <p class="meta detail">📍 ${address ? (z?.address ? zhText(address, z) : esc(address)) : esc(t('addressNA'))}</p>
+          ${z ? `<p class="meta detail credit">${creditHtml(z)}</p>` : ''}
         </div>
         <div class="side">
           <span>${r.km != null ? formatDistance(r.km) : ''}<span class="chev" aria-hidden="true">▾</span></span>
@@ -610,6 +680,12 @@ function deselect() {
   renderList();
 }
 
+function infoHtml(r) {
+  const z = zhPlace(r);
+  const address = z?.address || r.address;
+  return `<div class="info"><h3>${nameHtml(r, z)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${address ? `<p>${z?.address ? zhText(address, z) : esc(address)}</p>` : ''}<p><a href="${esc(mapsHref(r))}" target="_blank" rel="noopener">${esc(t('openInMaps'))}</a></p>${z ? `<p class="credit">${creditHtml(z)}</p>` : ''}</div>`;
+}
+
 // Selecting the restaurant that's already selected clears it instead.
 function select(id, { fromMap = false, toggle = true } = {}) {
   if (toggle && state.selectedId === id) { deselect(); return; }
@@ -617,11 +693,12 @@ function select(id, { fromMap = false, toggle = true } = {}) {
   clearTimeout(countryFit);
   map.userMoved = true; // the map moves to it; don't take that away later
   const r = state.restaurants.find(x => x.id === id);
+  if (r) loadPlace(r); // in the background; the card updates when it answers
   renderList();
   document.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); // an expanded card near the bottom shows its details
   if (!map.instance || !r) return;
   map.instance.panTo(latLng(r));
-  map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener">${esc(t('openInMaps'))}</a></p></div>`);
+  map.info.setContent(infoHtml(r));
   map.info.setPosition(latLng(r));
   map.info.open({ map: map.instance, shouldFocus: false });
 }

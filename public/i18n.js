@@ -46,6 +46,7 @@ const MESSAGES = {
     ratingNote: "Ratings from Google Maps. Google doesn't verify reviews but removes fake ones it finds.",
     aboutReviews: 'About reviews',
     openInMaps: 'Open in Google Maps',
+    placeCredit: 'Name and address from Google Maps',
     mapOffTitle: 'Map not configured.',
     mapOffBody: 'Set GOOGLE_MAPS_API_KEY in .env and restart the server.',
     listStillWorks: 'The list on the left still works.',
@@ -95,6 +96,7 @@ const MESSAGES = {
     ratingNote: '評分來自 Google 地圖。Google 不會驗證評論，但會移除其發現的不實評論。',
     aboutReviews: '關於評論',
     openInMaps: '在 Google 地圖中開啟',
+    placeCredit: '名稱與地址來自 Google Maps',
     mapOffTitle: '尚未設定地圖。',
     mapOffBody: '請在 .env 中設定 GOOGLE_MAPS_API_KEY，然後重新啟動伺服器。',
     listStillWorks: '左側的清單仍可使用。',
@@ -136,4 +138,18 @@ function detectLang(languages) {
   return 'en';
 }
 
-if (typeof module !== 'undefined') module.exports = { MESSAGES, FOOD_TYPES, detectLang };
+// Google Maps on the web opens in the page's language with hl=. Only the
+// long google.com/maps and maps.google.com links take it; a maps.app.goo.gl
+// short link redirects and is left alone, as is anything that isn't https.
+function localizedMapsUrl(url, lang) {
+  if (lang !== 'zh-TW') return url;
+  try {
+    const u = new URL(url);
+    const isMaps = u.protocol === 'https:' && ((/^(www\.)?google\.com$/i.test(u.hostname) && u.pathname.startsWith('/maps')) || u.hostname.toLowerCase() === 'maps.google.com');
+    if (!isMaps) return url;
+    u.searchParams.set('hl', lang);
+    return u.toString();
+  } catch { return url; }
+}
+
+if (typeof module !== 'undefined') module.exports = { MESSAGES, FOOD_TYPES, detectLang, localizedMapsUrl };

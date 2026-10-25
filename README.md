@@ -52,6 +52,7 @@ Server settings live in `.env` (never committed; `.env.example` lists them). Env
 | `HOST` | `127.0.0.1` | Address to listen on. Use `0.0.0.0` only to allow other machines on your network. |
 | `TRUST_PROXY` | off | Set to `1` only behind a reverse proxy, so the login lockout sees visitors' real addresses. |
 | `DATA_FILE` | `data/restaurants.json` | Where the restaurant list is stored. |
+| `PLACE_DETAILS_PER_DAY` | `150` | Most Google Place Details lookups per day (UTC) for opened restaurants on the Chinese page; past it the stored text is shown. Counted per server run (a restart starts the count again); every call that goes to Google counts, failed ones too. `0` turns them off; anything but a whole number is ignored with a warning at startup. See [Google setup](#google-setup). |
 
 The office and the map style can also be changed in **Manage → Settings** (see below), which overrides both `.env` and environment variables, without a restart (a new map style shows after a page reload). Everything else stays in `.env` on purpose: a wrong `HOST` or `PORT` would lock you out of the page you'd fix it from, `TRUST_PROXY` without a real proxy would let anyone bypass the login lockout, and `DATA_FILE` decides which file the server writes. The reasoning for each setting is in [docs/settings.md](docs/settings.md).
 
@@ -65,7 +66,7 @@ The map moves with one finger on a phone and zooms with the mouse wheel on a com
 
 On a phone held upright, the grab bar at the top of the list (or a swipe down on it or the title) slides the panel down so the map fills the screen. The panel keeps its header, any active food-type filters and, when you tap a pin or a card, that one restaurant's card with its phone and address. Swipe up or tap the bar again to bring the list back; typing in the search box does too. This isn't remembered between visits, and held sideways or on a computer there is no grab bar.
 
-The page is in English or Traditional Chinese (Taiwan). The first visit follows the browser's languages (Traditional Chinese for `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant`, `yue-Hant`; English for everything else, including Simplified Chinese), and the **中文** / **EN** button in the header switches and remembers the choice in the browser. Switching reloads the page, because Google Maps can't change its language in place; the map's own labels follow the page. Everything a visitor reads is translated, including country names and the names of the usual food types; a food type typed in Manage that isn't one of them shows as typed. Restaurant names and addresses are shown as stored, and the Manage window is English only. If the browser blocks storage, the switch still works, but the choice rides in the address as `?lang=en` or `?lang=zh-TW` and isn't remembered; a link with `?lang=` shows that language for that visit only. The texts are in `public/i18n.js`.
+The page is in English or Traditional Chinese (Taiwan). The first visit follows the browser's languages (Traditional Chinese for `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant`, `yue-Hant`; English for everything else, including Simplified Chinese), and the **中文** / **EN** button in the header switches and remembers the choice in the browser. Switching reloads the page, because Google Maps can't change its language in place; the map's own labels follow the page. Everything a visitor reads is translated, including country names and the names of the usual food types; a food type typed in Manage that isn't one of them shows as typed. Restaurant names and addresses are shown as stored, except that on the Chinese page the restaurant you open (tap its card or pin) shows Google's current Chinese name and address when Google has them, with the stored name as a smaller line and a Google Maps credit; the list, search and sorting keep the stored text. On the Chinese page, "Open in Google Maps" and rating links open Google Maps in Chinese (`hl=zh-TW`; short `maps.app.goo.gl` links are left as they are). The Manage window is English only. If the browser blocks storage, the switch still works, but the choice rides in the address as `?lang=en` or `?lang=zh-TW` and isn't remembered; a link with `?lang=` shows that language for that visit only. The texts are in `public/i18n.js`.
 
 **Manage** asks for the admin password and has three tabs:
 
@@ -582,7 +583,7 @@ For a full backup of the server, keep a copy of `.env`, `docker/Caddyfile` and t
 | Adding says the key has an `IP address restriction` that the call violates | The server key doesn't list the address the server calls Google from. Add the server's addresses (`curl -4 ifconfig.me` and `curl -6 ifconfig.me`) to the server key's **IP addresses**. |
 | You edited `.env` or the Caddyfile and nothing changed | Restart that container (see the table above). |
 
-The app's log lists each visitor's address. Visitors who arrive over IPv6 show up as one shared `172.x.x.x` address, because this setup doesn't give the containers IPv6. Then one such person's wrong passwords would lock all of them out of Manage. To avoid it, give your domain only an `A` record (IPv4), as in Step 1, and no `AAAA` record.
+The app's log lists each visitor's address. Visitors who arrive over IPv6 show up as one shared `172.x.x.x` address, because this setup doesn't give the containers IPv6. Then one such person's wrong passwords would lock all of them out of Manage. To avoid it, give your domain only an `A` record (IPv4), as in Step 1, and no `AAAA` record. In this setup IPv6 visitors also share one address for the per-address limits on Chinese names and addresses.
 
 ### Data, updates and backups
 
@@ -604,7 +605,7 @@ In Google Cloud console, enable billing and these two APIs, then create a key:
 | API | Used for | Called from |
 | --- | --- | --- |
 | Maps JavaScript API | the map and its pins | the browser |
-| Places API (New) | name, phone, address, website, food type and rating for each added link | the server |
+| Places API (New) | name, phone, address, website, food type and rating for each added link; the Chinese name and address of a restaurant opened on the Chinese page | the server |
 
 **One key or two.** One key in `GOOGLE_MAPS_API_KEY` works for trying the app out; under **API restrictions** allow only those two APIs, and give it **no** application restriction. The browser needs the key to draw the map, so anyone who opens the page can see it, and with one key they could also run Places lookups on your bill. Google allows only one kind of application restriction per key, and the two callers need different ones: the map runs in visitors' browsers, which say which website they are on, while Places lookups come from your server, which doesn't. So a **Websites** restriction on a single key makes every add fail with `Requests from referer <empty> are blocked`.
 
@@ -615,9 +616,9 @@ For a public site, use two keys (in Google Cloud console: **APIs & Services → 
 | Map key | `GOOGLE_MAPS_API_KEY` (or `GOOGLE_MAPS_BROWSER_KEY`) | **Websites**: `https://food.yourdomain.com/*` | Maps JavaScript API only |
 | Server key | `GOOGLE_PLACES_SERVER_KEY` | **IP addresses**: your server's public addresses (what `curl -4 ifconfig.me` prints on the server, plus `curl -6 ifconfig.me` if it prints one) | Places API (New) only |
 
-When `GOOGLE_PLACES_SERVER_KEY` is set, Places uses it and the map uses the other key. Restart the app after editing `.env`; Google may take up to 5 minutes to apply a key's new settings. With a single key and `TRUST_PROXY=1`, the server warns at startup. Daily quotas are a further safety net: **Google Maps Platform → Quotas**, choose **Places API (New)**, and lower **SearchTextRequest per day**.
+When `GOOGLE_PLACES_SERVER_KEY` is set, Places uses it and the map uses the other key. Restart the app after editing `.env`; Google may take up to 5 minutes to apply a key's new settings. With a single key and `TRUST_PROXY=1`, the server warns at startup. Daily quotas are a further safety net: **Google Maps Platform → Quotas**, choose **Places API (New)**, and lower **SearchTextRequest per day** (adding restaurants) and **GetPlaceRequest per day** (opening restaurants on the Chinese page). Check the exact quota names in the console, since Google renames them. The console quota is the hard cap. The app also limits itself with `PLACE_DETAILS_PER_DAY` (all visitors together; it restarts from zero when the app restarts) and, per visitor address, 15 requests a minute and half of that budget (at least 10) per 24 hours. People behind one internet address (an office, say) share that limit. A restaurant whose place ID Google rejects (400/404) is not asked for again until the app restarts; **Update from Google** in Manage may fix its place ID.
 
-**Cost.** Asking Places for the phone number makes each lookup a "Text Search Enterprise" request, which Google bills per 1,000 after a monthly free allowance (see Google's Places pricing page for current numbers). The app looks a place up once when it is added, and again only when you press **Update from Google**, never on page views. The rating comes in the same request at no extra cost. Map loads are billed separately under Maps JavaScript API.
+**Cost.** Asking Places for the phone number makes each lookup a "Text Search Enterprise" request, which Google bills per 1,000 after a monthly free allowance (see Google's Places pricing page for current numbers). The app looks a place up once when it is added, and again when you press **Update from Google**. Separately, each restaurant opened on the Chinese page makes one Place Details request (name and address, billed as Place Details Pro, with a monthly free allowance), at most `PLACE_DETAILS_PER_DAY` a day; English pages and merely viewing the list make none. The rating comes in the add request at no extra cost. Map loads are billed separately under Maps JavaScript API.
 
 **Map style.** Zoomed out, the built-in style hides Google's own places, transit and road icons so the restaurant pins stand out. From zoom 16 in (`DETAIL_ZOOM` in `public/app.js`) Google's normal map returns so nearby businesses are visible. With a map ID, Google uses the style attached to it in Cloud console instead.
 
@@ -634,7 +635,8 @@ Browser (public/)                      Server (server.js, lib/)                 
 
 - **`server.js`**: the HTTP server, built on Node's `http` module. It has a small route table, security headers, a per-response CSP nonce, static files, `/healthz` and an access log.
 - **`lib/parse.js`**: finds Google Maps links in pasted text and reads the place name, pin and IDs from a Maps URL; decides food types.
-- **`lib/resolve.js`**: expands short links (only ever to Google Maps hosts) and looks the place up with Places Text Search near the pin.
+- **`lib/resolve.js`**: expands short links (only ever to Google Maps hosts), looks the place up with Places Text Search near the pin, and fetches Place Details (name, address, attributions) for one stored place ID in one language.
+- **`lib/ratelimit.js`**: a small in-memory request limit per visitor address, used by the place route.
 - **`lib/store.js`**: the restaurant list. Writes are queued and atomic (temporary file, flush, rename), with daily backups.
 - **`lib/settings.js`**: the values changed in Manage → Settings, checked on load and on save.
 - **`lib/auth.js`**: password hashing (Argon2id or scrypt), login sessions and the lockout.
@@ -680,11 +682,12 @@ Browser (public/)                      Server (server.js, lib/)                 
 
 ### HTTP API
 
-All responses are JSON; errors are `{ "error": "…" }` with a status code (400 bad input, 401 not logged in or wrong password, 403 cross-site, 404/405 unknown route or method, 413 request too large, 415 not JSON, 429 locked out or busy, 500 saving failed, 502 Google unreachable, 503 no password set). Routes marked "login" need the session cookie from `/api/auth/login`. Every non-GET request must have `Content-Type: application/json`.
+All responses are JSON; errors are `{ "error": "…" }` with a status code (400 bad input, 401 not logged in or wrong password, 403 cross-site, 404/405 unknown route or method, 413 request too large, 415 not JSON, 429 locked out, busy or rate limited, 500 saving failed, 502 Google unreachable, 503 no password set). Routes marked "login" need the session cookie from `/api/auth/login`. Every non-GET request must have `Content-Type: application/json`.
 
 | Method and path | Login | Purpose |
 | --- | --- | --- |
 | `GET /api/config` | | Browser key, map ID, office, whether Places is enabled. |
+| `GET /api/place/:id?lang=zh-TW` | | Google's current name and address for one listed restaurant, in `en` or `zh-TW` (Place Details with only `displayName`, `formattedAddress` and `attributions`). The page calls it when a restaurant is opened on the Chinese page, and shows the result only if the name is Chinese. Nothing Google returns is stored or cached. `{ "available": false }` for a restaurant without a place ID; a place ID Google rejects gives 502 once, then `{ "available": false }` until the app restarts; 429 beyond 15 requests a minute or, per 24 hours, half of `PLACE_DETAILS_PER_DAY` (at least 10) per address. Also `{ "available": false }` once the site's `PLACE_DETAILS_PER_DAY` is used up. |
 | `GET /api/restaurants` | | Listed (not archived) restaurants. A missing `country` is filled in from the address. |
 | `GET /api/auth/session` | | Whether a password is set and whether you are logged in. |
 | `POST /api/auth/login`, `POST /api/auth/logout` | | `{ "password": "…" }` / end the session. |

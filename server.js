@@ -7,7 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { findLinks, countryFromAddress } = require('./lib/parse');
-const { resolveLink } = require('./lib/resolve');
+const { resolveLink, placeDetails, validPlaceId } = require('./lib/resolve');
+const { createLimiter } = require('./lib/ratelimit');
 const { createStore } = require('./lib/store');
 const { createSettings } = require('./lib/settings');
 const auth = require('./lib/auth');
@@ -69,7 +70,7 @@ function office() {
 const mapId = () => ('mapId' in settings.values ? settings.values.mapId : ENV_MAP_ID);
 
 // Settings that stay in .env: the tab says whether each is set, never its value.
-const SERVER_ONLY = ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY', 'ADMIN_PASSWORD_HASH', 'HOST', 'PORT', 'TRUST_PROXY', 'DATA_FILE'];
+const SERVER_ONLY = ['GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BROWSER_KEY', 'GOOGLE_PLACES_SERVER_KEY', 'ADMIN_PASSWORD_HASH', 'HOST', 'PORT', 'TRUST_PROXY', 'DATA_FILE', 'PLACE_DETAILS_PER_DAY'];
 
 // Where each .env-type value came from, for the Settings tab. Worked out at
 // startup, like the values themselves.
@@ -314,6 +315,72 @@ async function bulkChange(req, res, { action }) {
   return send(res, 200, { changed });
 }
 
+// The opened restaurant's name and address in the visitor's language, straight
+// from Google and not kept. The visitor names OUR restaurant id; the place ID
+// is only ever read from the stored record.
+const PLACE_LANGS = new Set(['en', 'zh-TW']);
+// Each call costs money, so the whole site gets PLACE_DETAILS_PER_DAY calls to
+// Google (UTC day, counted per server run; 0 turns the lookups off), and one
+// visitor address gets 15 requests a minute and, over 24 hours, half of that
+// budget (at least 10), so one address can't use it all up (people behind one
+// shared address, such as an office, share this). Every call that goes to
+// Google counts, even a failed one, so the budget is a hard local cap. Past
+// it, pages simply keep the stored text.
+const budgetEnv = (process.env.PLACE_DETAILS_PER_DAY ?? '').trim();
+if (budgetEnv && !/^\d+$/.test(budgetEnv)) console.warn(`  ! PLACE_DETAILS_PER_DAY="${budgetEnv}" is not a whole number: using 150.`);
+const PLACE_BUDGET = /^\d+$/.test(budgetEnv) ? Number(budgetEnv) : 150; // 150 x 31 days stays under the 5,000 free a month
+const placeLimiter = createLimiter({ max: 15, windowMs: 60 * 1000, maxTracked: 10000, keyOf: auth.clientKey });
+const placeDailyLimiter = createLimiter({ max: Math.max(10, Math.floor(PLACE_BUDGET / 2)), windowMs: 24 * 60 * 60 * 1000, maxTracked: 10000, keyOf: auth.clientKey });
+const placeSpend = { day: '', used: 0 };
+function takePlaceBudget() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (placeSpend.day !== day) { Object.assign(placeSpend, { day, used: 0 }); loggedFailures.clear(); }
+  if (placeSpend.used >= PLACE_BUDGET) return false;
+  placeSpend.used += 1;
+  return true;
+}
+// Restaurants (id + place ID) that Google said it doesn't know (400/404): not
+// asked again until the server restarts. Only that fact is kept.
+const badPlaces = new Set();
+// One log line per restaurant and status per UTC day, so a visitor can't fill
+// the log; the count of lines held back rides along on the next one.
+const loggedFailures = new Set();
+let suppressedFailures = 0;
+function logPlaceFailure(id, e, hint = '') {
+  const key = `${id}|${e.googleStatus || 'error'}`;
+  if (loggedFailures.has(key) || loggedFailures.size >= 1000) { suppressedFailures++; return; }
+  loggedFailures.add(key);
+  console.error(`place details for ${id} failed: ${e.message}${hint ? `; ${hint}` : ''}${suppressedFailures ? ` (${suppressedFailures} similar failures not logged)` : ''}`);
+  suppressedFailures = 0;
+}
+
+async function placeInLanguage(req, res, { id }) {
+  const ip = clientIp(req);
+  // The daily count only sees requests the minute limit let through.
+  const wait = placeLimiter.check(ip) || placeDailyLimiter.check(ip);
+  if (wait) return send(res, 429, { error: 'Too many requests. Try again in a moment.' }, undefined, { 'Retry-After': String(Math.ceil(wait / 1000)) });
+  const lang = new URL(req.url, 'http://localhost').searchParams.get('lang');
+  if (!PLACE_LANGS.has(lang)) throw badRequest('lang must be en or zh-TW');
+  const r = store.items.find(x => x.id === id && !x.archivedAt);
+  if (!r) throw Object.assign(new Error('Restaurant not found'), { status: 404 });
+  // Added without a place ID or without a key: the stored text stays.
+  if (!r.placeId || !validPlaceId(r.placeId) || !SERVER_KEY) return send(res, 200, { available: false });
+  const badKey = `${r.id}|${r.placeId}`;
+  if (badPlaces.has(badKey) || !takePlaceBudget()) return send(res, 200, { available: false });
+  try { return send(res, 200, await placeDetails(r.placeId, lang, SERVER_KEY)); }
+  catch (e) {
+    // A 404, or a 400 that isn't about the key, means this place ID is no good.
+    const keyProblem = e.googleReason === 'API_KEY_INVALID' || /API key/i.test(e.message);
+    if ((e.googleStatus === 404 || e.googleStatus === 400) && !keyProblem) {
+      if (!badPlaces.has(badKey) && badPlaces.size < 10000) {
+        badPlaces.add(badKey);
+        console.error(`place details for ${id}: Google doesn't accept its place ID (${e.googleStatus}); not asking again until restart. "Update from Google" in Manage may fix it.`);
+      }
+    } else logPlaceFailure(id, e, keyProblem ? 'check GOOGLE_PLACES_SERVER_KEY' : '');
+    throw Object.assign(new Error('Google could not be reached'), { status: 502 });
+  }
+}
+
 function findRestaurant(id) {
   const r = store.items.find(x => x.id === id);
   if (!r) throw Object.assign(new Error('Restaurant not found'), { status: 404 });
@@ -358,13 +425,14 @@ async function archiveRestaurant(req, res, { id }) { // a real delete is /purge
 // [method, path pattern, handler, needs login]
 const ID = '(?<id>[A-Za-z0-9-]{1,64})';
 const ROUTES = [
-  ['GET', '/api/config', (req, res) => send(res, 200, { browserKey: BROWSER_KEY, mapId: mapId(), office: office(), placesEnabled: !!SERVER_KEY }), false],
+  ['GET', '/api/config', (req, res) => send(res, 200, { browserKey: BROWSER_KEY, mapId: mapId(), office: office(), placesEnabled: !!SERVER_KEY, placeDetails: !!SERVER_KEY && PLACE_BUDGET > 0 }), false],
   ['GET', '/api/settings', (req, res) => send(res, 200, settingsView()), true],
   ['PUT', '/api/settings', updateSettings, true],
   ['GET', '/api/auth/session', (req, res) => send(res, 200, { passwordSet: !!PASSWORD_HASH, loggedIn: isLoggedIn(req) }), false],
   ['POST', '/api/auth/login', login, false],
   ['POST', '/api/auth/logout', logout, false],
   ['GET', '/api/restaurants', (req, res) => send(res, 200, active().map(withCountry)), false],
+  ['GET', `/api/place/${ID}`, placeInLanguage, false],
   ['POST', '/api/restaurants', addRestaurants, true],
   ['GET', '/api/restaurants/archived', (req, res) => send(res, 200, archived()), true],
   ['POST', '/api/restaurants/(?<action>archive|restore|purge)', bulkChange, true],
