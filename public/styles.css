@@ -13,6 +13,8 @@ body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; 
 .right { position: relative; min-height: 0; }
 #map { position: absolute; inset: 0; }
 
+/* Only phones held upright have the handle; see the media query below. */
+.sheet-handle { display: none; }
 .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 8px; padding: 14px 16px 4px; position: relative; }
 /* Title and Manage on the first line, the search and filters below. */
 .top .controls { order: 1; flex: 1 0 100%; }
@@ -111,7 +113,7 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
    part of the screen, so the page itself doesn't scroll and one finger moves
    the map. */
 @media (max-width: 760px) and (orientation: portrait) {
-  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 42%) minmax(0, 1fr); height: 100vh; height: 100dvh; }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: max(180px, 42%) minmax(0, 1fr); height: 100vh; height: 100dvh; }
   .right { order: -1; }
   .left { border-right: 0; border-top: 1px solid var(--border); }
   .active-filters { padding: 4px 12px 0; }
@@ -119,6 +121,25 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
   .list { padding: 0 12px calc(12px + env(safe-area-inset-bottom)); }
   .card { padding: 8px; }
   .btn { padding: 8px 12px; }
+
+  /* The handle slides the panel down (map mode) and back up. In map mode the
+     panel is only as tall as the handle, the header and, if one is picked,
+     its card; app.js sets --sheet-h to that height. touch-action: none lets a
+     swipe on the handle or title reach the script instead of the browser. */
+  .sheet-handle { display: flex; align-items: center; justify-content: center; width: 100%; height: 28px; padding: 0; border: 0; background: none; cursor: pointer; touch-action: none; flex: none; }
+  .sheet-grip { width: 40px; height: 5px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 60%, transparent); }
+  .sheet-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  h1 { touch-action: none; }
+  .app.sheet-down { grid-template-rows: calc(100% - min(var(--sheet-h, 120px), 75%)) minmax(0, 1fr); }
+  .sheet-down #origin, .sheet-down #ratingNote { display: none; }
+  .sheet-down .list:not(:has(.card.selected)), .sheet-down .card:not(.selected) { display: none; }
+  /* The toast would cover the header, so it sits above the panel. */
+  body:has(.sheet-down) .toast { bottom: calc(min(var(--sheet-h, 120px), 75vh) + 12px); }
+  /* The header is near the bottom now, so Filter opens upward. */
+  .sheet-down .filter-panel { top: auto; bottom: calc(100% + 4px); }
+}
+@media (max-width: 760px) and (orientation: portrait) and (prefers-reduced-motion: no-preference) {
+  .app { transition: grid-template-rows .25s ease; }
 }
 /* Narrow screens: one header line, with search, country and Filter as icons.
    The search box opens over the title. */

@@ -3,6 +3,7 @@
 // password-protected Manage window for adding, editing and archiving.
 
 const state = {
+  sheetDown: false,    // phones upright: the panel is slid down to show the map
   restaurants: [],
   config: null,
   origin: null,        // { lat, lng, label, isUser }
@@ -206,7 +207,70 @@ function toggleFilterPanel(open = $('filterPanel').hidden) {
 }
 function fitFilterPanel() {
   const panel = $('filterPanel');
-  if (!panel.hidden) panel.style.maxHeight = `${Math.max(120, Math.min(innerHeight * 0.6, innerHeight - panel.getBoundingClientRect().top - 12))}px`;
+  if (panel.hidden) return;
+  // In map mode the panel opens upward from the header, so it stops below the top of the screen.
+  const room = sheetDown() ? document.querySelector('.top').getBoundingClientRect().top - 16 : innerHeight - panel.getBoundingClientRect().top - 12;
+  panel.style.maxHeight = `${Math.max(120, Math.min(innerHeight * 0.6, room))}px`;
+}
+
+// ---- slide-down panel (phones held upright) ---------------------------------
+
+// Map mode: the list panel slides down to its handle and header (plus the
+// picked restaurant's card), leaving the map the rest of the screen. Only in
+// memory, and only upright: sideways and on a computer the state is ignored.
+const PORTRAIT_PHONE = matchMedia('(max-width: 760px) and (orientation: portrait)');
+const SWIPE_PX = 40;
+function sheetDown() { return state.sheetDown && PORTRAIT_PHONE.matches; }
+
+function setSheet(down) {
+  state.sheetDown = down;
+  toggleFilterPanel(false);
+  syncSheet();
+}
+// Sets the classes, the handle's label and the panel's height in map mode
+// (the handle, the header, any filter chips and the picked card).
+function syncSheet() {
+  const down = sheetDown();
+  const app = document.querySelector('.app');
+  app.classList.toggle('sheet-down', down);
+  const h = $('sheetHandle');
+  h.setAttribute('aria-label', down ? 'Show list' : 'Show map');
+  if (down) {
+    const sel = document.querySelector('#list .card.selected');
+    const list = $('list');
+    const box = el => (el.hidden ? 0 : el.offsetHeight);
+    let px = 1 + h.offsetHeight + document.querySelector('.top').offsetHeight + box($('activeFilters'));
+    if (sel) px += sel.offsetHeight + parseFloat(getComputedStyle(sel).marginBottom) + parseFloat(getComputedStyle(list).paddingBottom);
+    document.documentElement.style.setProperty('--sheet-h', `${px}px`);
+  }
+  fitFilterPanel();
+}
+
+// A swipe down on the handle or the title slides the panel down, a swipe up
+// slides it back, and a tap on the handle (its click) toggles. Presses that
+// start on a header button or field are theirs.
+function initSheet() {
+  const handle = $('sheetHandle');
+  let start = null, swipedAt = -Infinity;
+  document.querySelector('.left').addEventListener('pointerdown', e => {
+    if (!PORTRAIT_PHONE.matches || !e.isPrimary || !e.target.closest('.sheet-handle, .top') || e.target.closest('.top button, .top input, .top select, .filter-panel')) return;
+    start = { id: e.pointerId, y: e.clientY };
+  });
+  document.addEventListener('pointermove', e => {
+    if (!start || e.pointerId !== start.id) return;
+    const dy = e.clientY - start.y;
+    if (Math.abs(dy) < SWIPE_PX) return;
+    start = null;
+    swipedAt = e.timeStamp;
+    setSheet(dy > 0);
+  });
+  const end = e => { if (start && e.pointerId === start.id) start = null; };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+  // The click that follows a swipe ending on the handle isn't a tap (keyboard clicks, with no detail, always count).
+  handle.onclick = e => { if (e.detail && e.timeStamp - swipedAt < 500) return; setSheet(!state.sheetDown); };
+  PORTRAIT_PHONE.addEventListener('change', syncSheet); // turned sideways and back
+  addEventListener('resize', syncSheet);
 }
 
 // Phones: search is an icon that opens the box over the title; closing it
@@ -240,6 +304,7 @@ function renderList() {
   // its popup doesn't linger.
   if (state.selectedId && !items.some(r => r.id === state.selectedId)) { state.selectedId = null; map.info?.close(); }
   const list = $('list');
+  const listFocus = list.contains(document.activeElement);
   keepFocus(list, () => {
     list.innerHTML = items.length ? items.map(r => {
       const selected = r.id === state.selectedId;
@@ -264,6 +329,11 @@ function renderList() {
   // Google's attribution, shown whenever a rating is on screen.
   $('ratingNote').hidden = !items.some(r => ratingHtml(r));
   renderMarkers(items);
+  if (state.sheetDown) {
+    syncSheet(); // the picked card or the filter chips changed the panel's height
+    // The card that had focus is hidden in map mode; the handle is the nearest stop.
+    if (listFocus && !document.activeElement?.closest('.card.selected')) $('sheetHandle').focus();
+  }
 }
 
 function renderAll() { renderFilterOptions(); renderOrigin(); renderList(); renderEditList(); }
@@ -1054,7 +1124,8 @@ async function init() {
   });
   $('editSearch').oninput = e => { state.editSearch = e.target.value; renderEditList(); };
   $('editPane').onclick = e => onEditClick(e);
-  $('search').oninput = e => { state.search = e.target.value; renderList(); syncSearchToggle(); };
+  // Typing a search switches to the list, where the results are.
+  $('search').oninput = e => { state.search = e.target.value; if (state.sheetDown) setSheet(false); renderList(); syncSearchToggle(); };
   $('searchToggle').onclick = () => openSearch(!document.querySelector('.top').classList.contains('searching'));
   $('search').addEventListener('keydown', e => {
     if (e.key === 'Escape' && document.querySelector('.top').classList.contains('searching')) { e.stopPropagation(); openSearch(false); }
@@ -1088,6 +1159,7 @@ async function init() {
     if (!$('filterPanel').hidden && !e.target.closest('#filterPanel, #filterBtn')) toggleFilterPanel(false);
   });
   $('list').onclick = onListClick;
+  initSheet();
   addEventListener('resize', fitFilterPanel); // e.g. a phone turned sideways
   // Escape closes the filter panel if it's open, else clears the selection.
   document.addEventListener('keydown', e => {
