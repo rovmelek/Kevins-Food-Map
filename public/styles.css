@@ -13,7 +13,9 @@ body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; 
 .right { position: relative; min-height: 0; }
 #map { position: absolute; inset: 0; }
 
-.top { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; }
+.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 8px; padding: 14px 16px 4px; position: relative; }
+/* Title and Manage on the first line, the search and filters below. */
+.top .controls { order: 1; flex: 1 0 100%; }
 h1 { font-size: 20px; margin: 0; }
 .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
@@ -37,16 +39,23 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .results li { padding: 2px 0; word-break: break-all; }
 .results .added { color: var(--ok); } .results .duplicate { color: var(--muted); } .results .error { color: var(--error); }
 
-.controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 16px; position: relative; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; position: relative; }
 .controls input { flex: 1; min-width: 0; }
 /* With a country menu, the search box gets its own line; the menu and Filter share the next. */
-.controls:has(.country-select:not([hidden])) input { flex-basis: 100%; }
+.controls:has(.country-wrap:not([hidden])) input { flex-basis: 100%; }
+.country-wrap { flex: 1; display: flex; min-width: 0; }
 .country-select { flex: 1; width: auto; min-width: 0; cursor: pointer; }
-.country-select.active { border-color: var(--accent); color: var(--accent); }
+.country-wrap.active .country-select { border-color: var(--accent); color: var(--accent); }
+/* Icon versions for phones, hidden on wider screens. */
+.search-toggle, .country-icon, .manage-icon { display: none; }
+.icon-only { align-items: center; justify-content: center; gap: 4px; padding: 7px 9px; }
+.icon-only svg { flex: none; }
+.country-code { font-size: 12px; font-weight: 700; }
+.country-code:empty { display: none; }
 .filter-btn { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .filter-btn[aria-expanded="true"], .filter-btn.active { border-color: var(--accent); color: var(--accent); }
 .badge { background: var(--accent); color: var(--accent-ink); border-radius: 999px; min-width: 18px; padding: 0 5px; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
-.filter-panel { position: absolute; top: calc(100% + 4px); left: 16px; right: 16px; z-index: 20; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 10px 12px 12px; max-height: 60vh; overflow: auto; }
+.filter-panel { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 10px 12px 12px; max-height: 60vh; overflow: auto; }
 .filter-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; }
@@ -101,18 +110,43 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
    part of the screen, so the page itself doesn't scroll and one finger moves
    the map. */
 @media (max-width: 760px) and (orientation: portrait) {
-  .app { grid-template-columns: 1fr; grid-template-rows: minmax(180px, 42%) minmax(0, 1fr); height: 100vh; height: 100dvh; }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 42%) minmax(0, 1fr); height: 100vh; height: 100dvh; }
   .right { order: -1; }
   .left { border-right: 0; border-top: 1px solid var(--border); }
-  .top { padding: 8px 12px 4px; }
-  h1 { font-size: 17px; }
-  .controls { padding: 4px 12px; }
   .active-filters { padding: 4px 12px 0; }
   .origin { margin: 4px 12px 6px; }
   .list { padding: 0 12px calc(12px + env(safe-area-inset-bottom)); }
   .card { padding: 8px; }
-  .filter-panel { left: 12px; right: 12px; }
   .btn { padding: 8px 12px; }
+}
+/* Narrow screens: one header line, with search, country and Filter as icons.
+   The search box opens over the title. */
+@media (max-width: 760px) {
+  .top { flex-wrap: nowrap; gap: 6px; padding: 8px 12px 4px; }
+  h1 { flex: 1; min-width: 0; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .top .controls { flex: none; flex-wrap: nowrap; position: static; }
+  #manageBtn { order: 2; }
+  .controls input { display: none; }
+  /* Still there for screen readers, just not on screen. */
+  .top.searching h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .top.searching .country-code, .top.searching .badge { display: none; }
+  .top.searching .controls { flex: 1; min-width: 0; }
+  .top.searching .controls input { display: block; flex: 1; }
+  .search-toggle, .country-icon { display: inline-flex; }
+  /* 44px: the smallest comfortable tap target. */
+  .btn.icon-only, .filter-btn, #manageBtn { padding: 8px 9px; min-width: 44px; min-height: 44px; }
+  .search-toggle .i-close, .top.searching .search-toggle .i-open { display: none; }
+  .top.searching .search-toggle .i-close { display: block; }
+  .search-toggle.active, .country-wrap.active .country-icon { border-color: var(--accent); color: var(--accent); }
+  /* The real menu lies invisibly over the globe, so a tap opens the phone's own picker. */
+  .country-wrap { flex: none; position: relative; }
+  .country-wrap .country-select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; padding: 0; }
+  .country-wrap:has(select:focus-visible) .country-icon { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .filter-label, .manage-label { display: none; }
+  .manage-icon { display: block; }
+  /* The search icon turns into a ✕ that clears and closes, so the box needs no ✕ of its own. */
+  #search::-webkit-search-cancel-button { display: none; }
+  .filter-panel { left: 12px; right: 12px; }
 }
 /* Phones held sideways: list and map side by side, with a narrower list. */
 @media (max-width: 760px) and (orientation: landscape) {

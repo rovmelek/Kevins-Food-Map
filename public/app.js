@@ -130,12 +130,14 @@ function renderCountryOptions() {
   if (state.country && !counts.has(state.country)) { state.country = ''; setTimeout(fitToVisible); }
   const codes = [...counts.keys()].sort((a, b) => (a === NO_COUNTRY) - (b === NO_COUNTRY) || countryName(a).localeCompare(countryName(b)));
   const sel = $('countrySelect');
-  sel.hidden = codes.length < 2 && !state.country;
+  $('countryWrap').hidden = codes.length < 2 && !state.country;
   const html = `<option value="">All countries</option>` +
     codes.map(c => `<option value="${esc(c)}">${esc(countryName(c))} (${counts.get(c)})</option>`).join('');
   if (sel.innerHTML !== html) sel.innerHTML = html; // an open menu would close on a redraw
   sel.value = state.country;
-  sel.classList.toggle('active', !!state.country);
+  $('countryWrap').classList.toggle('active', !!state.country);
+  // The phone icon shows the picked country's code ("JP").
+  $('countryCode').textContent = state.country && state.country !== NO_COUNTRY ? state.country : state.country ? '?' : '';
 }
 
 function renderFilterOptions() {
@@ -206,6 +208,19 @@ function fitFilterPanel() {
   const panel = $('filterPanel');
   if (!panel.hidden) panel.style.maxHeight = `${Math.max(120, Math.min(innerHeight * 0.6, innerHeight - panel.getBoundingClientRect().top - 12))}px`;
 }
+
+// Phones: search is an icon that opens the box over the title; closing it
+// clears the search. The icon stays highlighted while a search is active.
+function openSearch(open) {
+  document.querySelector('.top').classList.toggle('searching', open);
+  $('searchToggle').setAttribute('aria-expanded', open);
+  $('searchToggle').setAttribute('aria-label', open ? 'Close search' : 'Search');
+  if (open) { $('search').focus(); return; }
+  if (state.search) { $('search').value = state.search = ''; renderList(); }
+  syncSearchToggle();
+  $('searchToggle').focus();
+}
+function syncSearchToggle() { $('searchToggle').classList.toggle('active', !!state.search.trim()); }
 
 function renderOrigin(note = '') {
   const el = $('origin');
@@ -1039,7 +1054,11 @@ async function init() {
   });
   $('editSearch').oninput = e => { state.editSearch = e.target.value; renderEditList(); };
   $('editPane').onclick = e => onEditClick(e);
-  $('search').oninput = e => { state.search = e.target.value; renderList(); };
+  $('search').oninput = e => { state.search = e.target.value; renderList(); syncSearchToggle(); };
+  $('searchToggle').onclick = () => openSearch(!document.querySelector('.top').classList.contains('searching'));
+  $('search').addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.querySelector('.top').classList.contains('searching')) { e.stopPropagation(); openSearch(false); }
+  });
   $('filterBtn').onclick = () => toggleFilterPanel();
   $('countrySelect').onchange = e => {
     state.country = e.target.value;

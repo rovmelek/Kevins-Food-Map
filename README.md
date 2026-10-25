@@ -61,7 +61,7 @@ Anyone can view the list and the map. The map opens centred on the visitor (or o
 
 The **country** menu (shown once restaurants are in more than one country) lists each country with its number of restaurants. Picking one shows only that country's restaurants in the list and on the map, and moves the map to show all of them; **Filter** then counts food types in that country. "All countries" goes back to the nearby view.
 
-The map moves with one finger on a phone and zooms with the mouse wheel on a computer, without the "use two fingers" or "use Ctrl + scroll" prompts. On a phone held upright, the map takes the top of the screen and the list the rest, and the list scrolls on its own; held sideways, the list and the map sit side by side.
+The map moves with one finger on a phone and zooms with the mouse wheel on a computer, without the "use two fingers" or "use Ctrl + scroll" prompts. On a phone held upright, the map takes the top of the screen and the list the rest, and the list scrolls on its own; held sideways, the list and the map sit side by side. On a narrow screen the header is one line: search, country, **Filter** and **Manage** are icons, and the search icon opens the search box over the title (its ✕ clears the search and closes it). An icon stays highlighted while its search or filter is on, and the country icon shows the picked country's code.
 
 **Manage** asks for the admin password and has three tabs:
 
