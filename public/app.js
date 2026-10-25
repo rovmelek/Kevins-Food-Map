@@ -249,11 +249,11 @@ function renderList() {
         <div>
           <button type="button" class="name card-main" data-act="select" aria-pressed="${selected}">${esc(r.name)}</button>
           ${ratingHtml(r) ? `<p class="meta">${ratingHtml(r)}</p>` : ''}
-          <p class="meta">${r.phone ? `📞 <a href="tel:${esc(String(r.phone).replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : '📞 Phone not available'}</p>
-          <p class="meta">📍 ${r.address ? esc(r.address) : 'Address not available'}</p>
+          <p class="meta detail">${r.phone ? `📞 <a href="tel:${esc(String(r.phone).replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a>` : '📞 Phone not available'}</p>
+          <p class="meta detail">📍 ${r.address ? esc(r.address) : 'Address not available'}</p>
         </div>
         <div class="side">
-          <span>${r.km != null ? formatDistance(r.km) : ''}</span>
+          <span>${r.km != null ? formatDistance(r.km) : ''}<span class="chev" aria-hidden="true">▾</span></span>
           <span class="tag">${esc(r.cuisine)}</span>
         </div>
       </li>`;
@@ -464,7 +464,7 @@ function select(id, { fromMap = false, toggle = true } = {}) {
   map.userMoved = true; // the map moves to it; don't take that away later
   const r = state.restaurants.find(x => x.id === id);
   renderList();
-  if (fromMap) document.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  document.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); // an expanded card near the bottom shows its details
   if (!map.instance || !r) return;
   map.instance.panTo(latLng(r));
   map.info.setContent(`<div class="info"><h3>${esc(r.name)}</h3>${ratingHtml(r) ? `<p>${ratingHtml(r)}</p>` : ''}${r.phone ? `<p>${esc(r.phone)}</p>` : ''}${r.address ? `<p>${esc(r.address)}</p>` : ''}<p><a href="${esc(safeUrl(r.mapsUrl))}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);

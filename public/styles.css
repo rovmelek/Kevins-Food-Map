@@ -89,6 +89,7 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
 .meta { color: var(--muted); font-size: 12px; margin: 1px 0; }
 .meta a { color: inherit; }
 .side { text-align: right; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.chev { display: none; }
 .tag { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; color: var(--text); cursor: pointer; font: inherit; font-size: 11px; }
 .empty { color: var(--muted); text-align: center; padding: 24px 8px; }
 
@@ -147,6 +148,22 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospa
   /* The search icon turns into a ✕ that clears and closes, so the box needs no ✕ of its own. */
   #search::-webkit-search-cancel-button { display: none; }
   .filter-panel { left: 12px; right: 12px; }
+}
+/* Cards are compact: the phone and address show only on the selected card,
+   and the chevron says there is more. Tapping a card expands it. The hidden
+   lines stay readable to screen readers. */
+@media (max-width: 760px) {
+  .card { position: relative; }
+  .card:not(.selected) .detail { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  /* A keyboard user tabbing to the phone link sees the line while it has focus. */
+  .card:not(.selected) .detail:focus-within { position: static; width: auto; height: auto; margin: 1px 0; overflow: visible; clip: auto; white-space: normal; }
+  /* A tap on a collapsed card's rating expands the card instead of leaving for Google Maps. */
+  .card:not(.selected) .rating { pointer-events: none; }
+  .chev { display: inline-block; margin-left: 6px; color: var(--muted); font-size: 12px; line-height: 1; }
+  .card.selected .chev { transform: rotate(180deg); }
+}
+@media (max-width: 760px) and (prefers-reduced-motion: no-preference) {
+  .chev { transition: transform .15s; }
 }
 /* Phones held sideways: list and map side by side, with a narrower list. */
 @media (max-width: 760px) and (orientation: landscape) {
